@@ -1,0 +1,7 @@
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS planned_checkup_at DATE;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS preferred_contact_method TEXT;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS manager_notes TEXT;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS source_detail TEXT;
+
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS source TEXT;
