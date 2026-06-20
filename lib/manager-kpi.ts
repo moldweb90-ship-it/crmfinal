@@ -55,6 +55,60 @@ export function managerName(managerId: string | null | undefined, managers: any[
   return manager?.full_name || manager?.name || 'Менеджер'
 }
 
+function conversationKey(item: any) {
+  return item.jivo_chat_id || item.jivo_client_id || `${item.client_phone || item.client_name || 'client'}-${(item.started_at || item.created_at || '').slice(0, 10)}`
+}
+
+function conversationContactKey(item: any) {
+  const contact = item.client_phone || item.client_name
+  const day = (item.started_at || item.created_at || '').slice(0, 10)
+  return contact && day ? `${contact}-${day}` : ''
+}
+
+function uniqueConversations(conversations: any[]) {
+  const map = new Map<string, any>()
+  conversations.forEach((item) => {
+    const key = conversationKey(item)
+    const contactKey = conversationContactKey(item)
+    const existingEntry = Array.from(map.entries()).find(([existingKey, existingItem]) => {
+      return existingKey === key || (contactKey && conversationContactKey(existingItem) === contactKey)
+    })
+    const existing = existingEntry?.[1]
+    if (!existing) {
+      map.set(key, item)
+      return
+    }
+
+    const itemHasManager = item.manager_name && item.manager_name !== 'Jivo operator'
+    const existingHasManager = existing.manager_name && existing.manager_name !== 'Jivo operator'
+    map.set(key, {
+      ...existing,
+      ...item,
+      manager_id: itemHasManager || !existingHasManager ? item.manager_id : existing.manager_id,
+      manager_name: itemHasManager || !existingHasManager ? item.manager_name : existing.manager_name,
+      accepted_at: item.accepted_at || existing.accepted_at,
+      first_response_at: item.first_response_at || existing.first_response_at,
+      response_seconds: item.response_seconds ?? existing.response_seconds,
+      messages_count: Math.max(Number(existing.messages_count || 0), Number(item.messages_count || 0)),
+      calls_count: Math.max(Number(existing.calls_count || 0), Number(item.calls_count || 0)),
+      consultation_count: Math.max(Number(existing.consultation_count || 0), Number(item.consultation_count || 0)),
+      appointment_created: Boolean(existing.appointment_created || item.appointment_created),
+      sale_closed: Boolean(existing.sale_closed || item.sale_closed),
+      sale_amount: Math.max(Number(existing.sale_amount || 0), Number(item.sale_amount || 0)),
+      status: existing.status === 'missed' && item.status !== 'missed' ? item.status : item.status || existing.status,
+    })
+    if (existingEntry && existingEntry[0] !== key) map.delete(existingEntry[0])
+  })
+  return Array.from(map.values())
+}
+
+function displayManagerName(managerId: string, managers: any[], conversations: any[]) {
+  const manager = managers.find((item) => item.id === managerId)
+  if (manager) return manager.full_name || manager.name || 'Менеджер'
+  const conversation = conversations.find((item) => (item.manager_id || 'manager-main') === managerId && item.manager_name)
+  return conversation?.manager_name || 'Менеджер'
+}
+
 export function dailyLabels(range: KpiRange) {
   const days = range === 'month' ? 14 : range === 'week' ? 7 : 1
   return Array.from({ length: days }).map((_, index) => {
@@ -82,7 +136,7 @@ export function buildManagerKpi({
   payments: any[]
 }) {
   const bounds = rangeBounds(range)
-  const rangedConversations = conversations.filter((item) => inRange(item.started_at || item.created_at, bounds.start, bounds.end))
+  const rangedConversations = uniqueConversations(conversations.filter((item) => inRange(item.started_at || item.created_at, bounds.start, bounds.end)))
   const rangedLeads = leads.filter((item) => inRange(item.created_at, bounds.start, bounds.end))
   const rangedAppointments = appointments.filter((item) => inRange(item.start_at || item.created_at, bounds.start, bounds.end))
   const rangedPayments = payments.filter((item) => inRange(item.paid_at || item.created_at, bounds.start, bounds.end))
@@ -111,7 +165,7 @@ export function buildManagerKpi({
 
     return {
       managerId,
-      managerName: managerName(managerId, managers),
+      managerName: displayManagerName(managerId, managers, rangedConversations),
       newLeads: managerLeads.length + managerConversations.filter((item) => item.status !== 'internal').length,
       conversations: managerConversations.length,
       clients: clients.size,
@@ -122,7 +176,7 @@ export function buildManagerKpi({
       closedSales,
       salesAmount,
       conversion: totalRequests ? Math.round((appointmentsCount / totalRequests) * 100) : 0,
-      missed: managerConversations.filter((item) => item.status === 'missed' || !item.first_response_at).length,
+      missed: managerConversations.filter((item) => item.status === 'missed').length,
     }
   })
 
@@ -166,7 +220,7 @@ export function buildManagerKpi({
 
   const trend = dailyLabels(range).map((day) => ({
     label: day.label,
-    value: conversations.filter((item) => {
+    value: uniqueConversations(conversations).filter((item) => {
       const date = item.started_at || item.created_at
       return date && isSameDay(parseISO(date), day.date)
     }).length,
@@ -199,4 +253,3 @@ export function kpiScore(row: any, target: any) {
 
   return parts.length ? Math.round(parts.reduce((sum, value) => sum + value, 0) / parts.length) : 0
 }
-

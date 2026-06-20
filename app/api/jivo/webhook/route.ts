@@ -7,34 +7,81 @@ function secondsBetween(start?: string | null, end?: string | null) {
   return Number.isFinite(diff) && diff >= 0 ? diff : null
 }
 
+function toIsoDate(value?: string | number | null) {
+  if (!value) return null
+  const date = typeof value === 'number'
+    ? new Date(value < 10000000000 ? value * 1000 : value)
+    : new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null
+}
+
+function firstMessageAt(messages: any[], type?: string) {
+  const message = messages.find((item) => !type || item?.type === type)
+  return toIsoDate(message?.timestamp)
+}
+
+function normalizeChannel(value?: string | null) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return 'website'
+  if (raw.includes('instagram')) return 'instagram'
+  if (raw.includes('facebook') || raw === 'fb') return 'facebook'
+  if (raw.includes('whatsapp') || raw === 'wa') return 'whatsapp'
+  if (raw.includes('telegram')) return 'telegram'
+  if (raw.includes('phone') || raw.includes('call')) return 'phone'
+  if (raw.includes('offline')) return 'offline'
+
+  // Jivo often sends widget IDs here. They are useful technically, but unreadable
+  // for managers, so the CRM treats them as site chats.
+  if (/^[a-z0-9_-]{8,}$/i.test(raw)) return 'website'
+  return 'other'
+}
+
+function normalizeStatus(eventName: string, event: any) {
+  const raw = String(event?.status || '').toLowerCase()
+  const name = eventName.toLowerCase()
+  if (name.includes('missed') || name.includes('offline') || raw.includes('missed')) return 'missed'
+  if (name.includes('finished') || name.includes('closed') || raw.includes('finished') || raw.includes('closed')) return 'finished'
+  if (name.includes('accepted') || raw.includes('accepted')) return 'answered'
+  return 'active'
+}
+
 function normalizeJivoPayload(payload: any) {
   const eventName = payload?.event_name || payload?.event?.event_name || payload?.event_type || 'unknown'
   const event = payload?.event || payload
   const visitor = event?.visitor || payload?.visitor || {}
-  const agent = event?.agent || event?.assigned_agent || payload?.agent || payload?.assigned_agent || {}
-  const chatId = event?.chat_id || payload?.chat_id || event?.id || payload?.id
-  const startedAt = event?.chat?.started_at || event?.started_at || payload?.started_at || new Date().toISOString()
-  const acceptedAt = event?.accepted_at || payload?.accepted_at || null
-  const firstResponseAt = event?.first_response_at || payload?.first_response_at || acceptedAt
-  const finishedAt = eventName === 'chat_finished' ? new Date().toISOString() : event?.finished_at || payload?.finished_at || null
-  const messages = event?.messages || event?.chat_log || payload?.messages || []
+  const agent = event?.agent || event?.assigned_agent || payload?.agent || payload?.assigned_agent || event?.agents?.[0] || payload?.agents?.[0] || {}
+  const chatId = event?.chat_id || payload?.chat_id || event?.chat?.id || payload?.chat?.id || event?.dialog_id || payload?.dialog_id
+  const messages = event?.chat?.messages || event?.messages || event?.chat_log || payload?.chat?.messages || payload?.messages || []
+  const eventAt = toIsoDate(event?.event_timestamp || payload?.event_timestamp) || new Date().toISOString()
+  const firstVisitorAt = Array.isArray(messages) ? firstMessageAt(messages, 'visitor') : null
+  const firstAgentAt = Array.isArray(messages) ? firstMessageAt(messages, 'agent') : null
+  const startedAt = toIsoDate(event?.chat?.started_at || event?.started_at || payload?.started_at) || firstVisitorAt || eventAt
+  const acceptedAt = toIsoDate(event?.accepted_at || payload?.accepted_at) || (eventName === 'chat_accepted' ? eventAt : null)
+  const firstResponseAt = toIsoDate(event?.first_response_at || payload?.first_response_at) || firstAgentAt || (eventName === 'chat_accepted' ? acceptedAt : null)
+  const finishedAt = eventName === 'chat_finished' ? eventAt : toIsoDate(event?.finished_at || payload?.finished_at)
+  const status = normalizeStatus(eventName, event)
+  const responseSeconds = event?.response_seconds
+    ?? payload?.response_seconds
+    ?? secondsBetween(firstVisitorAt || acceptedAt || startedAt, firstResponseAt)
 
   return {
     eventName,
     conversation: {
       jivo_chat_id: chatId ? String(chatId) : null,
-      channel: event?.channel || payload?.channel || event?.widget_id || 'website',
+      jivo_client_id: event?.client_id || payload?.client_id || visitor?.id || null,
+      jivo_widget_id: event?.widget_id || payload?.widget_id || null,
+      channel: normalizeChannel(event?.channel || payload?.channel || event?.source || payload?.source || event?.widget_id || payload?.widget_id),
       source: event?.source || payload?.source || 'Jivo',
       manager_id: agent?.id ? `jivo-${agent.id}` : 'manager-main',
       manager_name: agent?.name || agent?.email || 'Jivo operator',
       client_name: visitor?.name || event?.name || 'Клиент из Jivo',
       client_phone: visitor?.phone || event?.phone || '',
-      status: eventName === 'offline_message' ? 'missed' : eventName === 'chat_finished' ? 'finished' : 'active',
+      status,
       started_at: startedAt,
       accepted_at: acceptedAt,
       first_response_at: firstResponseAt,
       finished_at: finishedAt,
-      response_seconds: event?.response_seconds ?? payload?.response_seconds ?? secondsBetween(acceptedAt || startedAt, firstResponseAt),
+      response_seconds: responseSeconds,
       messages_count: Array.isArray(messages) ? messages.length : Number(event?.messages_count || 0),
       calls_count: Number(event?.calls_count || 0),
       consultation_count: Number(event?.consultation_count || 0),

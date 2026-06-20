@@ -79,6 +79,9 @@ export function ManagerKpiDashboard() {
     { label: 'Записи', value: kpi.totals.appointments },
     { label: 'Продажи', value: kpi.totals.closedSales },
   ]
+  const handled = Math.max(0, kpi.totals.conversations - kpi.totals.missed)
+  const handledPercent = kpi.totals.conversations ? Math.round((handled / kpi.totals.conversations) * 100) : 0
+  const missedPercent = kpi.totals.conversations ? Math.round((kpi.totals.missed / kpi.totals.conversations) * 100) : 0
 
   return (
     <div className="space-y-6 animate-soft-in">
@@ -120,6 +123,37 @@ export function ManagerKpiDashboard() {
           <KpiCard icon={UserCheck} label="Записи" value={kpi.totals.appointments} hint={`${kpi.totals.conversion}% конверсия`} tone="sky" />
           <KpiCard icon={Wallet} label="Сумма продаж" value={money(kpi.totals.salesAmount)} hint={`${kpi.totals.closedSales} закрыто`} tone="emerald" />
         </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <OwnerControlCard
+          icon={BadgeCheck}
+          label="Обработано обращений"
+          value={`${handled}/${kpi.totals.conversations}`}
+          hint={`${handledPercent}% диалогов не пропущены`}
+          tone="emerald"
+        />
+        <OwnerControlCard
+          icon={MessageCircle}
+          label="Пропущено Jivo"
+          value={kpi.totals.missed}
+          hint={kpi.totals.missed ? `${missedPercent}% нужно разобрать` : 'пропусков нет'}
+          tone={kpi.totals.missed ? 'rose' : 'teal'}
+        />
+        <OwnerControlCard
+          icon={Clock3}
+          label="Средний ответ"
+          value={formatSeconds(kpi.totals.avgResponseSeconds)}
+          hint="как быстро менеджер берет чат"
+          tone="sky"
+        />
+        <OwnerControlCard
+          icon={TrendingUp}
+          label="Довели до записи"
+          value={`${kpi.totals.appointments}`}
+          hint={`${kpi.totals.conversion}% от заявок и чатов`}
+          tone="teal"
+        />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
@@ -250,6 +284,9 @@ export function ManagerKpiDashboard() {
       <Card className="crm-panel border-0">
         <CardHeader>
           <CardTitle>Последние диалоги Jivo</CardTitle>
+          <p className="text-sm text-slate-500">
+            Здесь виден клиент, канал, ответственный менеджер и качество обработки. Один реальный чат считается один раз.
+          </p>
         </CardHeader>
         <CardContent className="grid gap-3 lg:grid-cols-2">
           {kpi.rangedConversations.slice(0, 6).map((item: any) => (
@@ -285,6 +322,30 @@ export function ManagerKpiDashboard() {
   )
 }
 
+function OwnerControlCard({ icon: Icon, label, value, hint, tone = 'teal' }: any) {
+  const tones: Record<string, string> = {
+    teal: 'bg-teal-50 text-teal-700',
+    sky: 'bg-sky-50 text-sky-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    rose: 'bg-rose-50 text-rose-700',
+  }
+
+  return (
+    <Card className="crm-panel border-0">
+      <CardContent className="flex items-start justify-between gap-3 p-4">
+        <div>
+          <div className="text-sm font-medium text-slate-500">{label}</div>
+          <div className="mt-2 text-2xl font-semibold leading-none text-slate-950">{value}</div>
+          <div className="mt-2 text-xs text-slate-500">{hint}</div>
+        </div>
+        <div className={`rounded-2xl p-3 ${tones[tone] || tones.teal}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function KpiCard({ icon: Icon, label, value, hint, tone = 'slate' }: any) {
   const tones: Record<string, string> = {
     slate: 'bg-slate-100 text-slate-700',
@@ -317,4 +378,3 @@ function MiniStat({ label, value, danger }: { label: string; value: string | num
     </div>
   )
 }
-

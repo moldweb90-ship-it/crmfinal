@@ -227,13 +227,48 @@ export async function upsertJivoEvent(eventName: string, conversation: AnyRow, p
     created_at: new Date().toISOString(),
   }])
 
-  const existing = conversation.jivo_chat_id
+  const shouldCreateConversation = Boolean(conversation.jivo_chat_id)
+    || ['offline_message', 'chat_started', 'chat_accepted', 'chat_finished', 'chat_missed'].includes(eventName || '')
+
+  if (!shouldCreateConversation) {
+    return {
+      event: event[0],
+      conversation: null,
+    }
+  }
+
+  const existingByChat = conversation.jivo_chat_id
     ? await selectRows('jivo_conversations', { eqField: 'jivo_chat_id', eqValue: conversation.jivo_chat_id, orderField: 'created_at', ascending: false })
     : []
 
-  const savedConversation = existing[0]
-    ? await updateRows('jivo_conversations', conversation, { field: 'id', value: existing[0].id })
-    : await insertRows('jivo_conversations', [conversation])
+  const existingByClient = existingByChat.length || !conversation.jivo_client_id
+    ? []
+    : await selectRows('jivo_conversations', { eqField: 'jivo_client_id', eqValue: conversation.jivo_client_id, orderField: 'created_at', ascending: false })
+
+  const existing = existingByChat[0] || existingByClient[0]
+  const genericManager = !conversation.manager_name || conversation.manager_name === 'Jivo operator'
+  const mergedConversation = existing
+    ? {
+        ...existing,
+        ...conversation,
+        manager_id: genericManager ? existing.manager_id : conversation.manager_id,
+        manager_name: genericManager ? existing.manager_name : conversation.manager_name,
+        accepted_at: conversation.accepted_at || existing.accepted_at,
+        first_response_at: conversation.first_response_at || existing.first_response_at,
+        response_seconds: conversation.response_seconds ?? existing.response_seconds,
+        messages_count: Math.max(Number(existing.messages_count || 0), Number(conversation.messages_count || 0)),
+        calls_count: Math.max(Number(existing.calls_count || 0), Number(conversation.calls_count || 0)),
+        consultation_count: Math.max(Number(existing.consultation_count || 0), Number(conversation.consultation_count || 0)),
+        appointment_created: Boolean(existing.appointment_created || conversation.appointment_created),
+        sale_closed: Boolean(existing.sale_closed || conversation.sale_closed),
+        sale_amount: Math.max(Number(existing.sale_amount || 0), Number(conversation.sale_amount || 0)),
+        raw_payload: conversation.raw_payload,
+      }
+    : conversation
+
+  const savedConversation = existing
+    ? await updateRows('jivo_conversations', mergedConversation, { field: 'id', value: existing.id })
+    : await insertRows('jivo_conversations', [mergedConversation])
 
   return {
     event: event[0],
