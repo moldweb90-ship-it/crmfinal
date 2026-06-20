@@ -170,7 +170,7 @@ export function ManagerKpiDashboard() {
           icon={TrendingUp}
           label="Ответ поздно"
           value={kpi.totals.lateResponses}
-          hint={kpi.totals.lateResponses ? `${latePercent}% сверх 2 мин` : 'в SLA'}
+          hint={kpi.totals.lateResponses ? `${latePercent}% сверх 2 мин` : 'в норме'}
           tone={kpi.totals.lateResponses ? 'rose' : 'teal'}
         />
       </div>
@@ -330,7 +330,7 @@ export function ManagerKpiDashboard() {
                     ) : quality.late ? (
                       <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">Ответ поздно</Badge>
                     ) : item.first_response_at ? (
-                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">В SLA</Badge>
+                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">Ответ вовремя</Badge>
                     ) : (
                       <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">Ждет ответа</Badge>
                     )}
