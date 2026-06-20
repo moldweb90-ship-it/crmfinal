@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { addDays, addMinutes, format, setHours, setMinutes } from 'date-fns'
 import {
   Activity,
   BadgeCheck,
@@ -8,8 +9,8 @@ import {
   Clock3,
   Headphones,
   MessageCircle,
-  PhoneCall,
   PlugZap,
+  CalendarPlus,
   Target,
   TrendingUp,
   UserCheck,
@@ -19,7 +20,11 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { AreaTrendChart, DonutChart, RadialScore, SoftBarChart } from '@/components/dashboard/charts'
 import {
   buildManagerKpi,
@@ -31,13 +36,19 @@ import {
 } from '@/lib/manager-kpi'
 import {
   useAppointments,
+  useClinics,
+  useContactHistory,
+  useDoctors,
   useJivoConversations,
   useLeads,
   useManagerKpiTargets,
   useManagers,
   usePayments,
+  usePatients,
+  useTasks,
 } from '@/lib/hooks'
 import { money } from '@/lib/crm'
+import { db } from '@/lib/insforge'
 
 const rangeLabels: Record<KpiRange, string> = {
   today: 'Сегодня',
@@ -50,10 +61,17 @@ export function ManagerKpiDashboard() {
   const [range, setRange] = useState<KpiRange>('today')
   const { managers } = useManagers()
   const { conversations } = useJivoConversations()
+  const { mutate: mutateConversations } = useJivoConversations()
   const { targets } = useManagerKpiTargets()
   const { leads } = useLeads()
-  const { appointments } = useAppointments()
+  const { appointments, mutate: mutateAppointments } = useAppointments()
   const { payments } = usePayments()
+  const { patients, mutate: mutatePatients } = usePatients()
+  const { tasks, mutate: mutateTasks } = useTasks()
+  const { contacts, mutate: mutateContacts } = useContactHistory()
+  const { doctors } = useDoctors()
+  const { clinics } = useClinics()
+  const [actionDialog, setActionDialog] = useState<{ open: boolean; conversation: any | null }>({ open: false, conversation: null })
 
   const kpi = useMemo(() => buildManagerKpi({
     range,
@@ -309,6 +327,26 @@ export function ManagerKpiDashboard() {
                 <MiniStat label="Сообщения" value={item.messages_count || 0} />
                 <MiniStat label="Продажа" value={item.sale_closed ? 'Да' : 'Нет'} />
               </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  className="rounded-xl bg-teal-600 hover:bg-teal-700"
+                  onClick={() => setActionDialog({ open: true, conversation: item })}
+                >
+                  <CalendarPlus className="mr-1.5 h-4 w-4" />
+                  Разобрать
+                </Button>
+                {item.crm_appointment_id && (
+                  <Badge variant="outline" className="rounded-xl border-emerald-200 bg-emerald-50 text-emerald-700">
+                    Запись создана
+                  </Badge>
+                )}
+                {item.outcome && !item.crm_appointment_id && (
+                  <Badge variant="outline" className="rounded-xl bg-slate-50 text-slate-600">
+                    {outcomeLabels[item.outcome] || item.outcome}
+                  </Badge>
+                )}
+              </div>
             </div>
           ))}
           {kpi.rangedConversations.length === 0 && (
@@ -318,7 +356,318 @@ export function ManagerKpiDashboard() {
           )}
         </CardContent>
       </Card>
+
+      <JivoActionDialog
+        open={actionDialog.open}
+        conversation={actionDialog.conversation}
+        onOpenChange={(open) => setActionDialog((current) => ({ ...current, open }))}
+        doctors={doctors}
+        clinics={clinics}
+        patients={patients}
+        tasks={tasks}
+        contacts={contacts}
+        onDone={async () => {
+          await Promise.all([
+            mutateConversations(),
+            mutatePatients(),
+            mutateAppointments(),
+            mutateTasks(),
+            mutateContacts(),
+          ])
+          setActionDialog({ open: false, conversation: null })
+        }}
+      />
     </div>
+  )
+}
+
+const outcomeLabels: Record<string, string> = {
+  appointment: 'Доведен до записи',
+  thinking: 'Думает',
+  callback: 'Перезвонить',
+  no_answer: 'Не отвечает',
+  rejected: 'Отказ',
+}
+
+function JivoActionDialog({
+  open,
+  onOpenChange,
+  conversation,
+  doctors,
+  clinics,
+  patients,
+  onDone,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  conversation: any | null
+  doctors: any[]
+  clinics: any[]
+  patients: any[]
+  tasks: any[]
+  contacts: any[]
+  onDone: () => Promise<void>
+}) {
+  const [saving, setSaving] = useState(false)
+  const [mode, setMode] = useState('appointment')
+  const [form, setForm] = useState({
+    patient_id: '',
+    patient_name: '',
+    phone: '',
+    doctor_id: '',
+    clinic_id: '',
+    service_name: 'Консультация',
+    date: format(new Date(), 'yyyy-MM-dd'),
+    time: '09:00',
+    duration: '60',
+    task_due: format(addDays(new Date(), 1), "yyyy-MM-dd'T'10:00"),
+    comment: '',
+  })
+
+  useEffect(() => {
+    if (!conversation) return
+    const existingPatient = patients.find((patient: any) => {
+      const phone = String(patient.phone || '').replace(/\D/g, '')
+      const jivoPhone = String(conversation.client_phone || '').replace(/\D/g, '')
+      return jivoPhone && phone.endsWith(jivoPhone.slice(-8))
+    })
+    setMode(conversation.outcome || 'appointment')
+    setForm({
+      patient_id: existingPatient?.id || conversation.crm_patient_id || '',
+      patient_name: existingPatient?.full_name || conversation.client_name || '',
+      phone: existingPatient?.phone || conversation.client_phone || '',
+      doctor_id: doctors[0]?.id || '',
+      clinic_id: clinics[0]?.id || '',
+      service_name: 'Консультация',
+      date: format(new Date(), 'yyyy-MM-dd'),
+      time: '09:00',
+      duration: '60',
+      task_due: format(addDays(new Date(), 1), "yyyy-MM-dd'T'10:00"),
+      comment: '',
+    })
+  }, [conversation, patients, doctors, clinics])
+
+  const ensurePatient = async () => {
+    if (form.patient_id) return form.patient_id
+    const patientResult = await db.from('patients').insert([{
+      full_name: form.patient_name || conversation?.client_name || 'Клиент из Jivo',
+      phone: form.phone || conversation?.client_phone || null,
+      source: 'jivo',
+      status: mode === 'appointment' ? 'active' : mode === 'thinking' ? 'thinking' : 'needs_follow_up',
+      preferred_contact_method: 'phone',
+      manager_notes: form.comment || `Клиент из Jivo. Диалог ${conversation?.jivo_chat_id || conversation?.id || ''}`,
+      total_spent: 0,
+      debt: 0,
+    }]).select()
+    return patientResult.data?.[0]?.id || null
+  }
+
+  const saveContact = async (patientId: string | null, summary: string) => {
+    if (!patientId) return
+    await db.from('contact_history').insert([{
+      patient_id: patientId,
+      type: 'jivo',
+      summary,
+      comment: form.comment || null,
+      created_at: new Date().toISOString(),
+      manager_id: conversation?.manager_id || 'manager-main',
+      jivo_chat_id: conversation?.jivo_chat_id || null,
+    }])
+  }
+
+  const handleSave = async () => {
+    if (!conversation) return
+    setSaving(true)
+    try {
+      const patientId = await ensurePatient()
+      let appointmentId = conversation.crm_appointment_id || null
+      let taskId = null
+
+      if (mode === 'appointment') {
+        const [hours, minutes] = form.time.split(':').map(Number)
+        const baseDate = new Date(`${form.date}T00:00:00`)
+        const start = setMinutes(setHours(baseDate, hours), minutes)
+        const end = addMinutes(start, Number(form.duration || 60))
+        const appointment = await db.from('appointments').insert([{
+          clinic_id: form.clinic_id || clinics[0]?.id || null,
+          patient_id: patientId,
+          patient_name: form.patient_name || conversation.client_name || 'Клиент из Jivo',
+          source: 'jivo',
+          doctor_id: form.doctor_id || doctors[0]?.id || null,
+          service_name: form.service_name || 'Консультация',
+          complaint: form.comment || null,
+          start_time: start.toISOString(),
+          end_time: end.toISOString(),
+          status: 'planned',
+          manager_id: conversation.manager_id || 'manager-main',
+          jivo_chat_id: conversation.jivo_chat_id || null,
+          jivo_conversation_id: conversation.id,
+        }]).select()
+        appointmentId = appointment.data?.[0]?.id || null
+        await saveContact(patientId, `Jivo: клиент доведен до записи на ${format(start, 'dd.MM.yyyy HH:mm')}`)
+      } else {
+        const titles: Record<string, string> = {
+          thinking: `Дожать после Jivo: ${form.patient_name || conversation.client_name}`,
+          callback: `Перезвонить после Jivo: ${form.patient_name || conversation.client_name}`,
+          no_answer: `Повторно связаться после Jivo: ${form.patient_name || conversation.client_name}`,
+          rejected: `Разобрать отказ Jivo: ${form.patient_name || conversation.client_name}`,
+        }
+        const task = await db.from('tasks').insert([{
+          title: titles[mode] || `Связаться после Jivo: ${form.patient_name || conversation.client_name}`,
+          description: form.comment || `Диалог Jivo: ${conversation.jivo_chat_id || conversation.id}`,
+          due_at: form.task_due ? new Date(form.task_due).toISOString() : addDays(new Date(), 1).toISOString(),
+          priority: mode === 'no_answer' ? 'high' : 'normal',
+          status: 'open',
+          patient_id: patientId,
+          source_type: 'jivo',
+          jivo_chat_id: conversation.jivo_chat_id || null,
+          jivo_conversation_id: conversation.id,
+        }]).select()
+        taskId = task.data?.[0]?.id || null
+        await saveContact(patientId, `Jivo: результат обработки - ${outcomeLabels[mode] || mode}`)
+      }
+
+      await db.from('jivo_conversations').update({
+        outcome: mode,
+        crm_patient_id: patientId,
+        crm_appointment_id: appointmentId,
+        crm_task_id: taskId,
+        appointment_created: mode === 'appointment',
+        appointment_created_at: mode === 'appointment' ? new Date().toISOString() : conversation.appointment_created_at || null,
+        status: mode === 'appointment' ? 'converted' : conversation.status,
+        handled_at: new Date().toISOString(),
+        manager_note: form.comment || null,
+      }).eq('id', conversation.id)
+
+      await onDone()
+    } catch (error) {
+      console.error('Jivo action failed:', error)
+      alert('Не получилось сохранить результат Jivo')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-[760px]">
+        <DialogHeader>
+          <DialogTitle>Разобрать Jivo-диалог</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-5">
+          <div className="rounded-3xl border bg-slate-50 p-4">
+            <div className="text-lg font-semibold text-slate-950">{conversation?.client_name || 'Клиент из Jivo'}</div>
+            <div className="mt-1 text-sm text-slate-500">
+              {conversation?.client_phone || 'телефон не указан'} · {conversation?.manager_name || 'менеджер не определен'} · {jivoChannelLabels[conversation?.channel] || 'Jivo'}
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-5">
+            {Object.entries(outcomeLabels).map(([key, label]) => (
+              <Button
+                key={key}
+                type="button"
+                variant={mode === key ? 'default' : 'outline'}
+                className={mode === key ? 'rounded-2xl bg-teal-600 hover:bg-teal-700' : 'rounded-2xl bg-white'}
+                onClick={() => setMode(key)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Пациент</Label>
+              <Select value={form.patient_id || 'new'} onValueChange={(patient_id) => {
+                const patient = patients.find((item: any) => item.id === patient_id)
+                setForm({ ...form, patient_id: patient_id === 'new' ? '' : patient_id, patient_name: patient?.full_name || form.patient_name, phone: patient?.phone || form.phone })
+              }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="new">Создать нового</SelectItem>
+                  {patients.map((patient: any) => <SelectItem key={patient.id} value={patient.id}>{patient.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Телефон</Label>
+              <Input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>Имя пациента</Label>
+              <Input value={form.patient_name} onChange={(event) => setForm({ ...form, patient_name: event.target.value })} />
+            </div>
+          </div>
+
+          {mode === 'appointment' ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Филиал</Label>
+                <Select value={form.clinic_id} onValueChange={(clinic_id) => setForm({ ...form, clinic_id })}>
+                  <SelectTrigger><SelectValue placeholder="Филиал" /></SelectTrigger>
+                  <SelectContent>{clinics.map((clinic: any) => <SelectItem key={clinic.id} value={clinic.id}>{clinic.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Врач</Label>
+                <Select value={form.doctor_id} onValueChange={(doctor_id) => setForm({ ...form, doctor_id })}>
+                  <SelectTrigger><SelectValue placeholder="Врач" /></SelectTrigger>
+                  <SelectContent>{doctors.map((doctor: any) => <SelectItem key={doctor.id} value={doctor.id}>{doctor.full_name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Дата</Label>
+                <Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} />
+              </div>
+              <div className="grid grid-cols-[1fr_120px] gap-2">
+                <div className="space-y-2">
+                  <Label>Время</Label>
+                  <Input type="time" value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Мин.</Label>
+                  <Select value={form.duration} onValueChange={(duration) => setForm({ ...form, duration })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="30">30</SelectItem>
+                      <SelectItem value="60">60</SelectItem>
+                      <SelectItem value="90">90</SelectItem>
+                      <SelectItem value="120">120</SelectItem>
+                      <SelectItem value="180">180</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label>Услуга</Label>
+                <Input value={form.service_name} onChange={(event) => setForm({ ...form, service_name: event.target.value })} />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>Когда напомнить менеджеру</Label>
+              <Input type="datetime-local" value={form.task_due} onChange={(event) => setForm({ ...form, task_due: event.target.value })} />
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label>Комментарий менеджера</Label>
+            <Textarea
+              value={form.comment}
+              onChange={(event) => setForm({ ...form, comment: event.target.value })}
+              placeholder="Что сказал пациент, что обещали, почему думает или когда перезвонить..."
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
+          <Button type="button" onClick={handleSave} disabled={saving} className="bg-teal-600 hover:bg-teal-700">
+            {saving ? 'Сохраняю...' : 'Сохранить результат'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

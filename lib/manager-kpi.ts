@@ -155,7 +155,7 @@ export function buildManagerKpi({
     const responseTimes = managerConversations
       .map((item) => Number(item.response_seconds))
       .filter((value) => Number.isFinite(value) && value >= 0)
-    const appointmentsCount = managerAppointments.length + managerConversations.filter((item) => item.appointment_created).length
+    const appointmentsCount = managerAppointments.length + managerConversations.filter((item) => item.appointment_created && !item.crm_appointment_id).length
     const salesAmount = managerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
       + managerConversations.reduce((sum, item) => sum + Number(item.sale_amount || 0), 0)
     const closedSales = managerConversations.filter((item) => item.sale_closed).length
