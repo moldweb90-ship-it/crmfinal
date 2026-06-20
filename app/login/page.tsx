@@ -12,8 +12,8 @@ import { useAuth } from '@/lib/auth'
 export default function LoginPage() {
   const router = useRouter()
   const { login } = useAuth()
-  const [email, setEmail] = useState('admin@lifedental.local')
-  const [password, setPassword] = useState('admin123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -65,14 +65,14 @@ export default function LoginPage() {
               <Label>Email</Label>
               <div className="relative">
                 <UserRound className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input value={email} onChange={(event) => setEmail(event.target.value)} className="h-12 rounded-2xl pl-9" />
+                <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email" className="h-12 rounded-2xl pl-9" />
               </div>
             </div>
             <div className="space-y-2">
               <Label>Пароль</Label>
               <div className="relative">
                 <LockKeyhole className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="h-12 rounded-2xl pl-9" />
+                <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="password" className="h-12 rounded-2xl pl-9" />
               </div>
             </div>
             {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
@@ -82,13 +82,6 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-6 rounded-3xl bg-slate-50 p-4 text-sm text-slate-600">
-            <div className="font-semibold text-slate-900">Демо-доступы</div>
-            <div className="mt-2 space-y-1">
-              <div>Админ: admin@lifedental.local / admin123</div>
-              <div>Менеджер: manager@lifedental.local / manager123</div>
-            </div>
-          </div>
         </section>
       </div>
     </main>
