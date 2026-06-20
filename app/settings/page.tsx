@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { LocalDataPanel } from '@/components/settings/local-data-panel'
+import { SystemStatusPanel } from '@/components/settings/system-status-panel'
 import { JivoIntegrationPanel } from '@/components/settings/jivo-integration-panel'
 import { GoogleCalendarPanel } from '@/components/settings/google-calendar-panel'
 
@@ -9,16 +9,16 @@ export default function SettingsPage() {
     <div className="space-y-6 animate-soft-in">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight">Настройки</h1>
-        <p className="mt-1 text-slate-500">Роли, источники, услуги и параметры клиники. Заготовка для следующего этапа.</p>
+        <p className="mt-1 text-slate-500">Состояние системы, интеграции, календари и рабочие параметры клиники.</p>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
-        <LocalDataPanel />
+        <SystemStatusPanel />
         <JivoIntegrationPanel />
         <GoogleCalendarPanel />
         {[
-          ['Роли', 'admin, manager, doctor'],
-          ['Источники', 'телефон, сайт, WhatsApp, Instagram'],
-          ['Интеграции', 'формы, телефония, SMS'],
+          ['Роли и доступы', 'admin, manager, doctor'],
+          ['Источники заявок', 'телефон, сайт, WhatsApp, Instagram, Jivo'],
+          ['Клиника', 'филиалы, врачи, график и услуги'],
         ].map(([title, text]) => (
           <Card key={title} className="crm-panel border-0">
             <CardHeader>

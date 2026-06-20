@@ -25,7 +25,7 @@ export const appModules = [
   { key: 'kpi', href: '/kpi', icon: BarChart3, label: 'KPI', description: 'Показатели менеджеров и Jivo-метрики.' },
   { key: 'doctors', href: '/doctors', icon: Stethoscope, label: 'Врачи', description: 'Врачи, профили, фото и специализации.' },
   { key: 'users', href: '/users', icon: ShieldCheck, label: 'Пользователи', description: 'Команда, роли и доступы к разделам.' },
-  { key: 'settings', href: '/settings', icon: Settings, label: 'Настройки', description: 'Интеграции, Google Calendar, Jivo и локальные данные.' },
+  { key: 'settings', href: '/settings', icon: Settings, label: 'Настройки', description: 'Интеграции, Google Calendar, Jivo и состояние системы.' },
 ]
 
 export const managerDefaultPermissions = [

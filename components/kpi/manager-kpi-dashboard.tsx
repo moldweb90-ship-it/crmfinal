@@ -63,7 +63,7 @@ export function ManagerKpiDashboard() {
   const { conversations } = useJivoConversations()
   const { mutate: mutateConversations } = useJivoConversations()
   const { targets } = useManagerKpiTargets()
-  const { leads } = useLeads()
+  const { leads, mutate: mutateLeads } = useLeads()
   const { appointments, mutate: mutateAppointments } = useAppointments()
   const { payments } = usePayments()
   const { patients, mutate: mutatePatients } = usePatients()
@@ -364,6 +364,7 @@ export function ManagerKpiDashboard() {
         doctors={doctors}
         clinics={clinics}
         patients={patients}
+        leads={leads}
         tasks={tasks}
         contacts={contacts}
         onDone={async () => {
@@ -373,6 +374,7 @@ export function ManagerKpiDashboard() {
             mutateAppointments(),
             mutateTasks(),
             mutateContacts(),
+            mutateLeads(),
           ])
           setActionDialog({ open: false, conversation: null })
         }}
@@ -396,6 +398,7 @@ function JivoActionDialog({
   doctors,
   clinics,
   patients,
+  leads,
   tasks,
   contacts,
   onDone,
@@ -406,6 +409,7 @@ function JivoActionDialog({
   doctors: any[]
   clinics: any[]
   patients: any[]
+  leads: any[]
   tasks: any[]
   contacts: any[]
   onDone: () => Promise<void>
@@ -464,10 +468,43 @@ function JivoActionDialog({
     return patientResult.data?.[0]?.id || null
   }
 
-  const saveContact = async (patientId: string | null, summary: string) => {
-    if (!patientId) return
+  const ensureLead = async (status: string, patientId: string | null = null) => {
+    const phone = String(form.phone || conversation?.client_phone || '').replace(/\D/g, '')
+    const existingLead = leads.find((lead: any) => {
+      const leadPhone = String(lead.phone || '').replace(/\D/g, '')
+      return (
+        (conversation?.crm_lead_id && lead.id === conversation.crm_lead_id)
+        || (conversation?.jivo_chat_id && lead.jivo_chat_id === conversation.jivo_chat_id)
+        || (phone && leadPhone && leadPhone.endsWith(phone.slice(-8)))
+      )
+    })
+    const payload = {
+      name: form.patient_name || conversation?.client_name || 'Клиент из Jivo',
+      phone: form.phone || conversation?.client_phone || null,
+      source: conversation?.channel || 'jivo',
+      interested_service: form.service_name || 'Консультация',
+      message: form.comment || `Диалог Jivo: ${conversation?.jivo_chat_id || conversation?.id || ''}`,
+      next_contact_at: mode !== 'appointment' && mode !== 'rejected' && form.task_due ? new Date(form.task_due).toISOString() : null,
+      status,
+      converted_patient_id: patientId,
+      patient_id: patientId,
+      jivo_chat_id: conversation?.jivo_chat_id || null,
+      jivo_conversation_id: conversation?.id || null,
+    }
+
+    if (existingLead) {
+      await db.from('leads').update(payload).eq('id', existingLead.id)
+      return existingLead.id
+    }
+
+    const leadResult = await db.from('leads').insert([payload]).select()
+    return leadResult.data?.[0]?.id || null
+  }
+
+  const saveContact = async (patientId: string | null, summary: string, leadId: string | null = null) => {
+    if (!patientId && !leadId) return
     const alreadyExists = contacts.some((contact: any) => (
-      contact.patient_id === patientId
+      (patientId ? contact.patient_id === patientId : contact.lead_id === leadId)
       && contact.jivo_chat_id === (conversation?.jivo_chat_id || null)
       && contact.summary === summary
     ))
@@ -475,6 +512,7 @@ function JivoActionDialog({
 
     await db.from('contact_history').insert([{
       patient_id: patientId,
+      lead_id: leadId,
       type: 'jivo',
       summary,
       comment: form.comment || null,
@@ -488,11 +526,14 @@ function JivoActionDialog({
     if (!conversation) return
     setSaving(true)
     try {
-      const patientId = await ensurePatient()
+      let patientId = form.patient_id || conversation.crm_patient_id || null
+      let leadId = conversation.crm_lead_id || null
       let appointmentId = conversation.crm_appointment_id || null
       let taskId = null
 
       if (mode === 'appointment') {
+        patientId = await ensurePatient()
+        leadId = await ensureLead('scheduled', patientId)
         const [hours, minutes] = form.time.split(':').map(Number)
         const baseDate = new Date(`${form.date}T00:00:00`)
         const start = setMinutes(setHours(baseDate, hours), minutes)
@@ -513,10 +554,13 @@ function JivoActionDialog({
           jivo_conversation_id: conversation.id,
         }]).select()
         appointmentId = appointment.data?.[0]?.id || null
-        await saveContact(patientId, `Jivo: клиент доведен до записи на ${format(start, 'dd.MM.yyyy HH:mm')}`)
+        await saveContact(patientId, `Jivo: клиент доведен до записи на ${format(start, 'dd.MM.yyyy HH:mm')}`, leadId)
       } else if (mode === 'rejected') {
-        await saveContact(patientId, `Jivo: отказ клиента${form.comment ? ` - ${form.comment}` : ''}`)
+        leadId = await ensureLead('rejected', null)
+        await saveContact(null, `Jivo: отказ клиента${form.comment ? ` - ${form.comment}` : ''}`, leadId)
       } else {
+        const leadStatus = mode === 'thinking' ? 'thinking' : mode === 'no_answer' ? 'no_answer' : 'contacted'
+        leadId = await ensureLead(leadStatus, patientId)
         const titles: Record<string, string> = {
           thinking: `Дожать после Jivo: ${form.patient_name || conversation.client_name}`,
           callback: `Перезвонить после Jivo: ${form.patient_name || conversation.client_name}`,
@@ -532,10 +576,14 @@ function JivoActionDialog({
           due_at: form.task_due ? new Date(form.task_due).toISOString() : addDays(new Date(), 1).toISOString(),
           priority: mode === 'no_answer' ? 'high' : 'normal',
           status: 'open',
-          patient_id: patientId,
+          patient_id: patientId || null,
+          lead_id: leadId || null,
           source_type: 'jivo',
           jivo_chat_id: conversation.jivo_chat_id || null,
           jivo_conversation_id: conversation.id,
+          client_name: form.patient_name || conversation.client_name || null,
+          client_phone: form.phone || conversation.client_phone || null,
+          jivo_channel: conversation.channel || null,
         }
 
         if (existingTask) {
@@ -545,12 +593,13 @@ function JivoActionDialog({
           const task = await db.from('tasks').insert([taskPayload]).select()
           taskId = task.data?.[0]?.id || null
         }
-        await saveContact(patientId, `Jivo: результат обработки - ${outcomeLabels[mode] || mode}`)
+        await saveContact(patientId, `Jivo: результат обработки - ${outcomeLabels[mode] || mode}`, leadId)
       }
 
       await db.from('jivo_conversations').update({
         outcome: mode,
         crm_patient_id: patientId,
+        crm_lead_id: leadId,
         crm_appointment_id: appointmentId,
         crm_task_id: taskId,
         appointment_created: mode === 'appointment',
@@ -599,14 +648,14 @@ function JivoActionDialog({
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Пациент</Label>
+              <Label>{mode === 'appointment' ? 'Пациент' : 'Если это уже пациент'}</Label>
               <Select value={form.patient_id || 'new'} onValueChange={(patient_id) => {
                 const patient = patients.find((item: any) => item.id === patient_id)
                 setForm({ ...form, patient_id: patient_id === 'new' ? '' : patient_id, patient_name: patient?.full_name || form.patient_name, phone: patient?.phone || form.phone })
               }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="new">Создать нового</SelectItem>
+                  <SelectItem value="new">{mode === 'appointment' ? 'Создать нового пациента' : 'Не пациент пока'}</SelectItem>
                   {patients.map((patient: any) => <SelectItem key={patient.id} value={patient.id}>{patient.full_name}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -616,7 +665,7 @@ function JivoActionDialog({
               <Input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
             </div>
             <div className="space-y-2 md:col-span-2">
-              <Label>Имя пациента</Label>
+              <Label>{mode === 'appointment' ? 'Имя пациента' : 'Имя клиента'}</Label>
               <Input value={form.patient_name} onChange={(event) => setForm({ ...form, patient_name: event.target.value })} />
             </div>
           </div>
