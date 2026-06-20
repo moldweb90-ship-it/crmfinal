@@ -57,17 +57,25 @@ function numericSeconds(value: any) {
 
 function conversationWaitSeconds(item: any) {
   const stored = numericSeconds(item.wait_seconds)
-  if (stored != null) return stored
+  if (
+    stored != null
+    && (
+      item.first_response_at
+      || item.accepted_at
+      || ((item.finished_at || item.status === 'missed') && stored >= 30)
+    )
+  ) return stored
 
   const start = item.started_at || item.created_at
-  const end = item.first_response_at || item.accepted_at || item.finished_at
+  const end = item.first_response_at || item.accepted_at || item.finished_at || new Date().toISOString()
   if (!start || !end) return null
   const diff = Math.round((parseISO(end).getTime() - parseISO(start).getTime()) / 1000)
   return Number.isFinite(diff) && diff >= 0 ? diff : null
 }
 
 function isAbandonedConversation(item: any) {
-  return Boolean(item.abandoned || item.status === 'missed' || (item.finished_at && !item.first_response_at))
+  const wait = conversationWaitSeconds(item)
+  return Boolean((item.abandoned || item.status === 'missed' || (item.finished_at && !item.first_response_at)) && wait != null && wait >= 30)
 }
 
 function isLateConversation(item: any) {
@@ -118,7 +126,7 @@ function uniqueConversations(conversations: any[]) {
       response_seconds: item.response_seconds ?? existing.response_seconds,
       wait_seconds: item.wait_seconds ?? existing.wait_seconds,
       accept_seconds: item.accept_seconds ?? existing.accept_seconds,
-      abandoned: Boolean(existing.abandoned || item.abandoned),
+      abandoned: Boolean(item.abandoned ?? existing.abandoned),
       late_response: Boolean(existing.late_response || item.late_response),
       response_sla_seconds: item.response_sla_seconds ?? existing.response_sla_seconds,
       messages_count: Math.max(Number(existing.messages_count || 0), Number(item.messages_count || 0)),

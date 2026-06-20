@@ -67,7 +67,11 @@ function normalizeJivoPayload(payload: any) {
     ?? secondsBetween(firstVisitorAt || acceptedAt || startedAt, firstResponseAt)
   const waitSeconds = secondsBetween(startedAt, firstResponseAt || acceptedAt || finishedAt || eventAt)
   const acceptSeconds = secondsBetween(startedAt, acceptedAt)
-  const abandoned = status === 'missed' || Boolean(finishedAt && !firstResponseAt)
+  const abandoned = Boolean(
+    (status === 'missed' || (finishedAt && !firstResponseAt))
+    && waitSeconds != null
+    && waitSeconds >= 30
+  )
   const lateResponse = Boolean(
     (typeof responseSeconds === 'number' && responseSeconds > JIVO_RESPONSE_SLA_SECONDS)
     || (!firstResponseAt && waitSeconds != null && waitSeconds > JIVO_RESPONSE_SLA_SECONDS)

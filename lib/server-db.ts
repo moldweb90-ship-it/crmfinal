@@ -258,7 +258,7 @@ export async function upsertJivoEvent(eventName: string, conversation: AnyRow, p
         response_seconds: conversation.response_seconds ?? existing.response_seconds,
         wait_seconds: conversation.wait_seconds ?? existing.wait_seconds,
         accept_seconds: conversation.accept_seconds ?? existing.accept_seconds,
-        abandoned: Boolean(existing.abandoned || conversation.abandoned),
+        abandoned: Boolean(conversation.abandoned ?? existing.abandoned),
         late_response: Boolean(existing.late_response || conversation.late_response),
         response_sla_seconds: conversation.response_sla_seconds ?? existing.response_sla_seconds,
         messages_count: Math.max(Number(existing.messages_count || 0), Number(conversation.messages_count || 0)),

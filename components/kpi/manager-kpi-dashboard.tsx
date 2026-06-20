@@ -59,6 +59,7 @@ const rangeLabels: Record<KpiRange, string> = {
 
 export function ManagerKpiDashboard() {
   const [range, setRange] = useState<KpiRange>('today')
+  const [clockTick, setClockTick] = useState(0)
   const { managers } = useManagers()
   const { conversations } = useJivoConversations()
   const { mutate: mutateConversations } = useJivoConversations()
@@ -73,6 +74,11 @@ export function ManagerKpiDashboard() {
   const { clinics } = useClinics()
   const [actionDialog, setActionDialog] = useState<{ open: boolean; conversation: any | null }>({ open: false, conversation: null })
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((value) => value + 1), 15000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const kpi = useMemo(() => buildManagerKpi({
     range,
     managers,
@@ -80,7 +86,7 @@ export function ManagerKpiDashboard() {
     leads,
     appointments,
     payments,
-  }), [range, managers, conversations, leads, appointments, payments])
+  }), [range, managers, conversations, leads, appointments, payments, clockTick])
 
   const primaryRow = kpi.rows[0]
   const primaryTarget = targets.find((target: any) => target.manager_id === primaryRow?.managerId) || targets[0]
@@ -414,9 +420,17 @@ const jivoSlaSeconds = 120
 
 function jivoWaitSeconds(item: any) {
   const stored = Number(item?.wait_seconds)
-  if (Number.isFinite(stored) && stored >= 0) return stored
+  if (
+    Number.isFinite(stored)
+    && stored >= 0
+    && (
+      item?.first_response_at
+      || item?.accepted_at
+      || ((item?.finished_at || item?.status === 'missed') && stored >= 30)
+    )
+  ) return stored
   const start = item?.started_at || item?.created_at
-  const end = item?.first_response_at || item?.accepted_at || item?.finished_at
+  const end = item?.first_response_at || item?.accepted_at || item?.finished_at || new Date().toISOString()
   if (!start || !end) return null
   const diff = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000)
   return Number.isFinite(diff) && diff >= 0 ? diff : null
@@ -426,7 +440,7 @@ function jivoQuality(item: any) {
   const wait = jivoWaitSeconds(item)
   const response = Number(item?.response_seconds)
   const hasResponse = Boolean(item?.first_response_at && Number.isFinite(response) && response >= 0)
-  const abandoned = Boolean(item?.abandoned || item?.status === 'missed' || (item?.finished_at && !item?.first_response_at))
+  const abandoned = Boolean((item?.abandoned || item?.status === 'missed' || (item?.finished_at && !item?.first_response_at)) && wait != null && wait >= 30)
   const late = Boolean(item?.late_response || (hasResponse && response > jivoSlaSeconds) || (!item?.first_response_at && wait != null && wait > jivoSlaSeconds))
 
   return { wait, response: hasResponse ? response : null, abandoned, late }
