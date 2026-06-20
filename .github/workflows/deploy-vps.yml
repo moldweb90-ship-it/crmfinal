@@ -45,6 +45,16 @@ jobs:
             fi
 
             cd "$APP_DIR"
+            if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+              echo "DATABASE_URL secret is required for server database mode"
+              exit 1
+            fi
+
+            printf '%s\n' \
+              'NEXT_PUBLIC_DB_MODE=server' \
+              'DATABASE_URL=${{ secrets.DATABASE_URL }}' \
+              > .env.production
+
             npm ci
             npm run build
             pm2 restart lifedental-crm || pm2 start npm --name lifedental-crm -- start -- -p 3000

@@ -4,7 +4,7 @@ type Store = Record<string, AnyRow[]>
 const STORAGE_KEY = 'lifedental_crm_local_db_v1'
 let cachedStore: Store | null = null
 
-const seed: Store = {
+export const seed: Store = {
   clinics: [
     {
       id: 'clinic-zelinski',
@@ -256,7 +256,7 @@ const seed: Store = {
   ],
 }
 
-const tables = Object.keys(seed)
+export const tables = Object.keys(seed)
 
 function canUseStorage() {
   return typeof window !== 'undefined' && Boolean(window.localStorage)

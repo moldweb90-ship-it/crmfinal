@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { upsertJivoEvent } from '@/lib/server-db'
 
 function secondsBetween(start?: string | null, end?: string | null) {
   if (!start || !end) return null
@@ -54,9 +55,10 @@ export async function POST(request: NextRequest) {
 
   const normalized = normalizeJivoPayload(payload)
 
-  // In the local browser CRM data is stored in localStorage, so this endpoint is a ready
-  // integration contract. When the project moves to a server DB, insert normalized.event
-  // and normalized.conversation into jivo_events / jivo_conversations here.
+  const saved = process.env.DATABASE_URL
+    ? await upsertJivoEvent(normalized.eventName, normalized.conversation, payload)
+    : null
+
   return NextResponse.json({
     result: 'ok',
     custom_data: [
@@ -64,6 +66,7 @@ export async function POST(request: NextRequest) {
       { title: 'KPI', content: 'Диалог будет учтен в KPI менеджера после подключения серверной базы' },
     ],
     normalized,
+    saved,
   })
 }
 
@@ -74,4 +77,3 @@ export async function GET() {
     expects: 'POST JSON from Jivo CRM Webhooks',
   })
 }
-
