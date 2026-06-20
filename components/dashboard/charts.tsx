@@ -156,24 +156,26 @@ export function RadialScore({ value, label }: { value: number; label: string }) 
   const dash = (Math.min(100, Math.max(0, value)) / 100) * circumference
 
   return (
-    <div className="relative h-32 w-32">
-      <svg viewBox="0 0 120 120" className="-rotate-90">
-        <circle cx="60" cy="60" r={radius} fill="none" stroke="#e0f2fe" strokeWidth="12" />
-        <circle
-          cx="60"
-          cy="60"
-          r={radius}
-          fill="none"
-          stroke="#14b8a6"
-          strokeDasharray={`${dash} ${circumference}`}
-          strokeLinecap="round"
-          strokeWidth="12"
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <div className="text-2xl font-semibold text-slate-950">{value}%</div>
-        <div className="text-xs text-slate-500">{label}</div>
+    <div className="flex w-32 shrink-0 flex-col items-center">
+      <div className="relative h-28 w-28">
+        <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
+          <circle cx="60" cy="60" r={radius} fill="none" stroke="#e0f2fe" strokeWidth="12" />
+          <circle
+            cx="60"
+            cy="60"
+            r={radius}
+            fill="none"
+            stroke="#14b8a6"
+            strokeDasharray={`${dash} ${circumference}`}
+            strokeLinecap="round"
+            strokeWidth="12"
+          />
+        </svg>
+        <div className="absolute inset-0 grid place-items-center">
+          <div className="translate-y-[1px] text-center text-2xl font-semibold leading-none text-slate-950">{value}%</div>
+        </div>
       </div>
+      <div className="mt-1 text-center text-xs leading-none text-slate-500">{label}</div>
     </div>
   )
 }
