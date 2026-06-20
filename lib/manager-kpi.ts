@@ -50,6 +50,33 @@ export function formatSeconds(seconds: number | null | undefined) {
   return rest ? `${minutes} мин ${rest} сек` : `${minutes} мин`
 }
 
+function numericSeconds(value: any) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : null
+}
+
+function conversationWaitSeconds(item: any) {
+  const stored = numericSeconds(item.wait_seconds)
+  if (stored != null) return stored
+
+  const start = item.started_at || item.created_at
+  const end = item.first_response_at || item.accepted_at || item.finished_at
+  if (!start || !end) return null
+  const diff = Math.round((parseISO(end).getTime() - parseISO(start).getTime()) / 1000)
+  return Number.isFinite(diff) && diff >= 0 ? diff : null
+}
+
+function isAbandonedConversation(item: any) {
+  return Boolean(item.abandoned || item.status === 'missed' || (item.finished_at && !item.first_response_at))
+}
+
+function isLateConversation(item: any) {
+  const sla = Number(item.response_sla_seconds || 120)
+  const response = numericSeconds(item.response_seconds)
+  const wait = conversationWaitSeconds(item)
+  return Boolean(item.late_response || (response != null && response > sla) || (!item.first_response_at && wait != null && wait > sla))
+}
+
 export function managerName(managerId: string | null | undefined, managers: any[]) {
   const manager = managers.find((item) => item.id === managerId)
   return manager?.full_name || manager?.name || 'Менеджер'
@@ -89,6 +116,11 @@ function uniqueConversations(conversations: any[]) {
       accepted_at: item.accepted_at || existing.accepted_at,
       first_response_at: item.first_response_at || existing.first_response_at,
       response_seconds: item.response_seconds ?? existing.response_seconds,
+      wait_seconds: item.wait_seconds ?? existing.wait_seconds,
+      accept_seconds: item.accept_seconds ?? existing.accept_seconds,
+      abandoned: Boolean(existing.abandoned || item.abandoned),
+      late_response: Boolean(existing.late_response || item.late_response),
+      response_sla_seconds: item.response_sla_seconds ?? existing.response_sla_seconds,
       messages_count: Math.max(Number(existing.messages_count || 0), Number(item.messages_count || 0)),
       calls_count: Math.max(Number(existing.calls_count || 0), Number(item.calls_count || 0)),
       consultation_count: Math.max(Number(existing.consultation_count || 0), Number(item.consultation_count || 0)),
@@ -153,8 +185,11 @@ export function buildManagerKpi({
     const managerAppointments = rangedAppointments.filter((item) => (item.manager_id || item.created_by || 'manager-main') === managerId)
     const managerPayments = rangedPayments.filter((item) => (item.manager_id || 'manager-main') === managerId)
     const responseTimes = managerConversations
-      .map((item) => Number(item.response_seconds))
-      .filter((value) => Number.isFinite(value) && value >= 0)
+      .map((item) => item.first_response_at ? numericSeconds(item.response_seconds) : null)
+      .filter((value): value is number => value != null)
+    const waitTimes = managerConversations
+      .map(conversationWaitSeconds)
+      .filter((value): value is number => typeof value === 'number')
     const appointmentsCount = managerAppointments.length + managerConversations.filter((item) => item.appointment_created && !item.crm_appointment_id).length
     const salesAmount = managerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
       + managerConversations.reduce((sum, item) => sum + Number(item.sale_amount || 0), 0)
@@ -170,13 +205,15 @@ export function buildManagerKpi({
       conversations: managerConversations.length,
       clients: clients.size,
       avgResponseSeconds: responseTimes.length ? Math.round(responseTimes.reduce((sum, value) => sum + value, 0) / responseTimes.length) : null,
+      avgWaitSeconds: waitTimes.length ? Math.round(waitTimes.reduce((sum, value) => sum + value, 0) / waitTimes.length) : null,
       calls: managerConversations.reduce((sum, item) => sum + Number(item.calls_count || 0), 0),
       consultations: managerConversations.reduce((sum, item) => sum + Number(item.consultation_count || 0), 0),
       appointments: appointmentsCount,
       closedSales,
       salesAmount,
       conversion: totalRequests ? Math.round((appointmentsCount / totalRequests) * 100) : 0,
-      missed: managerConversations.filter((item) => item.status === 'missed').length,
+      missed: managerConversations.filter(isAbandonedConversation).length,
+      lateResponses: managerConversations.filter(isLateConversation).length,
     }
   })
 
@@ -190,6 +227,7 @@ export function buildManagerKpi({
     closedSales: acc.closedSales + row.closedSales,
     salesAmount: acc.salesAmount + row.salesAmount,
     missed: acc.missed + row.missed,
+    lateResponses: acc.lateResponses + row.lateResponses,
   }), {
     newLeads: 0,
     conversations: 0,
@@ -200,11 +238,16 @@ export function buildManagerKpi({
     closedSales: 0,
     salesAmount: 0,
     missed: 0,
+    lateResponses: 0,
   })
 
   const responseValues = rows.map((row) => row.avgResponseSeconds).filter((value): value is number => typeof value === 'number')
   const avgResponseSeconds = responseValues.length
     ? Math.round(responseValues.reduce((sum, value) => sum + value, 0) / responseValues.length)
+    : null
+  const waitValues = rows.map((row) => row.avgWaitSeconds).filter((value): value is number => typeof value === 'number')
+  const avgWaitSeconds = waitValues.length
+    ? Math.round(waitValues.reduce((sum, value) => sum + value, 0) / waitValues.length)
     : null
   const conversion = totals.newLeads ? Math.round((totals.appointments / totals.newLeads) * 100) : 0
 
@@ -229,7 +272,7 @@ export function buildManagerKpi({
   return {
     bounds,
     rows: rows.sort((a, b) => b.salesAmount - a.salesAmount || b.appointments - a.appointments),
-    totals: { ...totals, avgResponseSeconds, conversion },
+    totals: { ...totals, avgResponseSeconds, avgWaitSeconds, conversion },
     byChannel,
     trend,
     rangedConversations,

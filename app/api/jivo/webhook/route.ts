@@ -7,6 +7,8 @@ function secondsBetween(start?: string | null, end?: string | null) {
   return Number.isFinite(diff) && diff >= 0 ? diff : null
 }
 
+const JIVO_RESPONSE_SLA_SECONDS = 120
+
 function toIsoDate(value?: string | number | null) {
   if (!value) return null
   const date = typeof value === 'number'
@@ -57,12 +59,19 @@ function normalizeJivoPayload(payload: any) {
   const firstAgentAt = Array.isArray(messages) ? firstMessageAt(messages, 'agent') : null
   const startedAt = toIsoDate(event?.chat?.started_at || event?.started_at || payload?.started_at) || firstVisitorAt || eventAt
   const acceptedAt = toIsoDate(event?.accepted_at || payload?.accepted_at) || (eventName === 'chat_accepted' ? eventAt : null)
-  const firstResponseAt = toIsoDate(event?.first_response_at || payload?.first_response_at) || firstAgentAt || (eventName === 'chat_accepted' ? acceptedAt : null)
+  const firstResponseAt = toIsoDate(event?.first_response_at || payload?.first_response_at) || firstAgentAt || null
   const finishedAt = eventName === 'chat_finished' ? eventAt : toIsoDate(event?.finished_at || payload?.finished_at)
   const status = normalizeStatus(eventName, event)
   const responseSeconds = event?.response_seconds
     ?? payload?.response_seconds
     ?? secondsBetween(firstVisitorAt || acceptedAt || startedAt, firstResponseAt)
+  const waitSeconds = secondsBetween(startedAt, firstResponseAt || acceptedAt || finishedAt || eventAt)
+  const acceptSeconds = secondsBetween(startedAt, acceptedAt)
+  const abandoned = status === 'missed' || Boolean(finishedAt && !firstResponseAt)
+  const lateResponse = Boolean(
+    (typeof responseSeconds === 'number' && responseSeconds > JIVO_RESPONSE_SLA_SECONDS)
+    || (!firstResponseAt && waitSeconds != null && waitSeconds > JIVO_RESPONSE_SLA_SECONDS)
+  )
 
   return {
     eventName,
@@ -82,6 +91,11 @@ function normalizeJivoPayload(payload: any) {
       first_response_at: firstResponseAt,
       finished_at: finishedAt,
       response_seconds: responseSeconds,
+      wait_seconds: waitSeconds,
+      accept_seconds: acceptSeconds,
+      abandoned,
+      late_response: lateResponse,
+      response_sla_seconds: JIVO_RESPONSE_SLA_SECONDS,
       messages_count: Array.isArray(messages) ? messages.length : Number(event?.messages_count || 0),
       calls_count: Number(event?.calls_count || 0),
       consultation_count: Number(event?.consultation_count || 0),

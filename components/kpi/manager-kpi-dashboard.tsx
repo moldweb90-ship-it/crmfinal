@@ -100,6 +100,7 @@ export function ManagerKpiDashboard() {
   const handled = Math.max(0, kpi.totals.conversations - kpi.totals.missed)
   const handledPercent = kpi.totals.conversations ? Math.round((handled / kpi.totals.conversations) * 100) : 0
   const missedPercent = kpi.totals.conversations ? Math.round((kpi.totals.missed / kpi.totals.conversations) * 100) : 0
+  const latePercent = kpi.totals.conversations ? Math.round((kpi.totals.lateResponses / kpi.totals.conversations) * 100) : 0
 
   return (
     <div className="space-y-6 animate-soft-in">
@@ -153,24 +154,24 @@ export function ManagerKpiDashboard() {
         />
         <OwnerControlCard
           icon={MessageCircle}
-          label="Пропущено Jivo"
+          label="Клиент ушел"
           value={kpi.totals.missed}
-          hint={kpi.totals.missed ? `${missedPercent}% нужно разобрать` : 'пропусков нет'}
+          hint={kpi.totals.missed ? `${missedPercent}% без ответа` : 'уходов без ответа нет'}
           tone={kpi.totals.missed ? 'rose' : 'teal'}
         />
         <OwnerControlCard
           icon={Clock3}
-          label="Средний ответ"
-          value={formatSeconds(kpi.totals.avgResponseSeconds)}
-          hint="как быстро менеджер берет чат"
-          tone="sky"
+          label="Клиент ждал"
+          value={formatSeconds(kpi.totals.avgWaitSeconds)}
+          hint="до ответа, принятия или ухода"
+          tone={kpi.totals.avgWaitSeconds && kpi.totals.avgWaitSeconds > 120 ? 'rose' : 'sky'}
         />
         <OwnerControlCard
           icon={TrendingUp}
-          label="Довели до записи"
-          value={`${kpi.totals.appointments}`}
-          hint={`${kpi.totals.conversion}% от заявок и чатов`}
-          tone="teal"
+          label="Ответ поздно"
+          value={kpi.totals.lateResponses}
+          hint={kpi.totals.lateResponses ? `${latePercent}% сверх 2 мин` : 'в SLA'}
+          tone={kpi.totals.lateResponses ? 'rose' : 'teal'}
         />
       </div>
 
@@ -208,7 +209,7 @@ export function ManagerKpiDashboard() {
                 <MiniStat label="Звонки" value={kpi.totals.calls} />
                 <MiniStat label="Консультации" value={kpi.totals.consultations} />
                 <MiniStat label="Клиенты" value={kpi.totals.clients} />
-                <MiniStat label="Пропущено" value={kpi.totals.missed} danger />
+                <MiniStat label="Сорвано" value={kpi.totals.missed} danger />
               </div>
             </div>
           </CardContent>
@@ -244,13 +245,14 @@ export function ManagerKpiDashboard() {
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-sm">
+            <table className="w-full min-w-[1080px] text-sm">
               <thead>
                 <tr className="border-b bg-slate-50/70 text-left text-xs uppercase tracking-wide text-slate-500">
                   <th className="px-5 py-3">Менеджер</th>
                   <th className="px-4 py-3">KPI</th>
                   <th className="px-4 py-3">Заявки</th>
                   <th className="px-4 py-3">Ответ</th>
+                  <th className="px-4 py-3">Клиент ждал</th>
                   <th className="px-4 py-3">Звонки</th>
                   <th className="px-4 py-3">Консультации</th>
                   <th className="px-4 py-3">Записи</th>
@@ -284,6 +286,7 @@ export function ManagerKpiDashboard() {
                       </td>
                       <td className="px-4 py-4 font-medium">{row.newLeads}</td>
                       <td className="px-4 py-4">{formatSeconds(row.avgResponseSeconds)}</td>
+                      <td className="px-4 py-4">{formatSeconds(row.avgWaitSeconds)}</td>
                       <td className="px-4 py-4">{row.calls}</td>
                       <td className="px-4 py-4">{row.consultations}</td>
                       <td className="px-4 py-4">{row.appointments}</td>
@@ -307,48 +310,64 @@ export function ManagerKpiDashboard() {
           </p>
         </CardHeader>
         <CardContent className="grid gap-3 lg:grid-cols-2">
-          {kpi.rangedConversations.slice(0, 6).map((item: any) => (
-            <div key={item.id} className="rounded-3xl border bg-white p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-semibold text-slate-950">{item.client_name || 'Клиент без имени'}</div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
-                    <span>{item.client_phone || 'нет телефона'}</span>
-                    <span>•</span>
-                    <span>{item.manager_name || 'Менеджер'}</span>
+          {kpi.rangedConversations.slice(0, 6).map((item: any) => {
+            const quality = jivoQuality(item)
+
+            return (
+              <div key={item.id} className="rounded-3xl border bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold text-slate-950">{item.client_name || 'Клиент без имени'}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                      <span>{item.client_phone || 'нет телефона'}</span>
+                      <span>•</span>
+                      <span>{item.manager_name || 'Менеджер'}</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {quality.abandoned ? (
+                      <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700">Клиент ушел</Badge>
+                    ) : quality.late ? (
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">Ответ поздно</Badge>
+                    ) : item.first_response_at ? (
+                      <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">В SLA</Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">Ждет ответа</Badge>
+                    )}
+                    <Badge variant="outline" style={{ borderColor: jivoChannelColors[item.channel] || '#cbd5e1', color: jivoChannelColors[item.channel] || '#475569' }}>
+                      {jivoChannelLabels[item.channel] || item.channel || 'Канал'}
+                    </Badge>
                   </div>
                 </div>
-                <Badge variant="outline" style={{ borderColor: jivoChannelColors[item.channel] || '#cbd5e1', color: jivoChannelColors[item.channel] || '#475569' }}>
-                  {jivoChannelLabels[item.channel] || item.channel || 'Канал'}
-                </Badge>
+                <div className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                  <MiniStat label="Ждал" value={formatSeconds(quality.wait)} danger={quality.abandoned || quality.late} />
+                  <MiniStat label="Ответ" value={formatSeconds(quality.response)} danger={quality.late} />
+                  <MiniStat label="Сообщения" value={item.messages_count || 0} />
+                  <MiniStat label="Продажа" value={item.sale_closed ? 'Да' : 'Нет'} />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    className="rounded-xl bg-teal-600 hover:bg-teal-700"
+                    onClick={() => setActionDialog({ open: true, conversation: item })}
+                  >
+                    <CalendarPlus className="mr-1.5 h-4 w-4" />
+                    Разобрать
+                  </Button>
+                  {item.crm_appointment_id && (
+                    <Badge variant="outline" className="rounded-xl border-emerald-200 bg-emerald-50 text-emerald-700">
+                      Запись создана
+                    </Badge>
+                  )}
+                  {item.outcome && !item.crm_appointment_id && (
+                    <Badge variant="outline" className="rounded-xl bg-slate-50 text-slate-600">
+                      {outcomeLabels[item.outcome] || item.outcome}
+                    </Badge>
+                  )}
+                </div>
               </div>
-              <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
-                <MiniStat label="Ответ" value={formatSeconds(item.response_seconds)} />
-                <MiniStat label="Сообщения" value={item.messages_count || 0} />
-                <MiniStat label="Продажа" value={item.sale_closed ? 'Да' : 'Нет'} />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  className="rounded-xl bg-teal-600 hover:bg-teal-700"
-                  onClick={() => setActionDialog({ open: true, conversation: item })}
-                >
-                  <CalendarPlus className="mr-1.5 h-4 w-4" />
-                  Разобрать
-                </Button>
-                {item.crm_appointment_id && (
-                  <Badge variant="outline" className="rounded-xl border-emerald-200 bg-emerald-50 text-emerald-700">
-                    Запись создана
-                  </Badge>
-                )}
-                {item.outcome && !item.crm_appointment_id && (
-                  <Badge variant="outline" className="rounded-xl bg-slate-50 text-slate-600">
-                    {outcomeLabels[item.outcome] || item.outcome}
-                  </Badge>
-                )}
-              </div>
-            </div>
-          ))}
+            )
+          })}
           {kpi.rangedConversations.length === 0 && (
             <div className="rounded-3xl border border-dashed p-8 text-center text-sm text-slate-500 lg:col-span-2">
               Диалогов за выбранный период пока нет. После подключения Jivo они будут попадать сюда автоматически.
@@ -389,6 +408,28 @@ const outcomeLabels: Record<string, string> = {
   callback: 'Перезвонить',
   no_answer: 'Не отвечает',
   rejected: 'Отказ',
+}
+
+const jivoSlaSeconds = 120
+
+function jivoWaitSeconds(item: any) {
+  const stored = Number(item?.wait_seconds)
+  if (Number.isFinite(stored) && stored >= 0) return stored
+  const start = item?.started_at || item?.created_at
+  const end = item?.first_response_at || item?.accepted_at || item?.finished_at
+  if (!start || !end) return null
+  const diff = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000)
+  return Number.isFinite(diff) && diff >= 0 ? diff : null
+}
+
+function jivoQuality(item: any) {
+  const wait = jivoWaitSeconds(item)
+  const response = Number(item?.response_seconds)
+  const hasResponse = Boolean(item?.first_response_at && Number.isFinite(response) && response >= 0)
+  const abandoned = Boolean(item?.abandoned || item?.status === 'missed' || (item?.finished_at && !item?.first_response_at))
+  const late = Boolean(item?.late_response || (hasResponse && response > jivoSlaSeconds) || (!item?.first_response_at && wait != null && wait > jivoSlaSeconds))
+
+  return { wait, response: hasResponse ? response : null, abandoned, late }
 }
 
 function JivoActionDialog({
