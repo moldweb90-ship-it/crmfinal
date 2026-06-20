@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useClinics, useDoctors, useGoogleCalendarEvents, useGoogleCalendarSources } from '@/lib/hooks'
 import { db } from '@/lib/insforge'
-import { buildDemoGoogleEvent, googleSyncModes } from '@/lib/google-calendar'
+import { googleSyncModes } from '@/lib/google-calendar'
 
 const colors = ['#4285f4', '#34a853', '#fbbc04', '#ea4335', '#14b8a6', '#8b5cf6']
 
@@ -54,13 +54,6 @@ export function GoogleCalendarPanel() {
       color_code: colors[0],
       sync_mode: 'read_only',
     })
-    mutateSources()
-  }
-
-  const demoSync = async (source: any) => {
-    await db.from('google_calendar_events').insert([buildDemoGoogleEvent(source)])
-    await db.from('google_calendar_sources').update({ last_synced_at: new Date().toISOString() }).eq('id', source.id)
-    mutateEvents()
     mutateSources()
   }
 
@@ -240,10 +233,6 @@ export function GoogleCalendarPanel() {
                   <Badge variant="outline" className="bg-white">{count} событий</Badge>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => demoSync(source)} className="rounded-xl">
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Тест sync
-                  </Button>
                   <Button size="sm" onClick={() => importIcs(source)} disabled={syncingId === source.id} className="rounded-xl bg-sky-600 hover:bg-sky-700">
                     <RefreshCw className="mr-2 h-4 w-4" />
                     {syncingId === source.id ? 'Импорт...' : 'Импорт ICS'}
