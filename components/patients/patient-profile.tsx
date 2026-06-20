@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -35,6 +36,21 @@ export function PatientProfile({ patientId }: { patientId: string }) {
   const [type, setType] = useState('call')
   const [taskTitle, setTaskTitle] = useState('')
   const [aftercareMonths, setAftercareMonths] = useState('6')
+  const [aftercareMessage, setAftercareMessage] = useState('')
+  const [aftercareLoading, setAftercareLoading] = useState(false)
+  const [aftercarePreset, setAftercarePreset] = useState('standard')
+  const [aftercareOptions, setAftercareOptions] = useState({
+    wellbeingDay1: true,
+    wellbeingDay1Delay: '1',
+    wellbeingDay3: true,
+    wellbeingDay3Delay: '3',
+    review: true,
+    reviewDelay: '3',
+    videoReview: true,
+    videoReviewDelay: '7',
+    checkupBooking: true,
+    repeatVisit: true,
+  })
   const [editingContactId, setEditingContactId] = useState<string | null>(null)
   const [contactDraft, setContactDraft] = useState({ type: 'note', summary: '' })
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
@@ -217,16 +233,128 @@ export function PatientProfile({ patientId }: { patientId: string }) {
     mutateTasks()
   }
 
-  const launchAftercare = async () => {
-    await ensurePatientAftercareTasks({
-      patientId,
-      patientName: patient.full_name,
-      sourceType: 'patient',
-      sourceId: patientId,
-      checkupMonths: Number(aftercareMonths),
+  const setAftercareOption = (key: string, value: string | boolean) => {
+    setAftercareOptions((current) => ({ ...current, [key]: value }))
+  }
+
+  const applyAftercarePreset = (preset: string) => {
+    setAftercarePreset(preset)
+    if (preset === 'hygiene') {
+      setAftercareOptions({
+        wellbeingDay1: false,
+        wellbeingDay1Delay: '1',
+        wellbeingDay3: false,
+        wellbeingDay3Delay: '3',
+        review: true,
+        reviewDelay: '2',
+        videoReview: false,
+        videoReviewDelay: '7',
+        checkupBooking: true,
+        repeatVisit: true,
+      })
+      setAftercareMonths('6')
+      return
+    }
+    if (preset === 'surgery') {
+      setAftercareOptions({
+        wellbeingDay1: true,
+        wellbeingDay1Delay: '1',
+        wellbeingDay3: true,
+        wellbeingDay3Delay: '3',
+        review: true,
+        reviewDelay: '7',
+        videoReview: false,
+        videoReviewDelay: '14',
+        checkupBooking: true,
+        repeatVisit: true,
+      })
+      setAftercareMonths('3')
+      return
+    }
+    if (preset === 'ortho') {
+      setAftercareOptions({
+        wellbeingDay1: false,
+        wellbeingDay1Delay: '1',
+        wellbeingDay3: true,
+        wellbeingDay3Delay: '7',
+        review: true,
+        reviewDelay: '14',
+        videoReview: true,
+        videoReviewDelay: '30',
+        checkupBooking: true,
+        repeatVisit: true,
+      })
+      setAftercareMonths('2')
+      return
+    }
+    setAftercareOptions({
+      wellbeingDay1: true,
+      wellbeingDay1Delay: '1',
+      wellbeingDay3: true,
+      wellbeingDay3Delay: '3',
+      review: true,
+      reviewDelay: '3',
+      videoReview: true,
+      videoReviewDelay: '7',
+      checkupBooking: true,
+      repeatVisit: true,
     })
-    await mutatePatients()
-    await mutateTasks()
+    setAftercareMonths('6')
+  }
+
+  const launchAftercare = async () => {
+    const selectedCount = [
+      aftercareOptions.wellbeingDay1,
+      aftercareOptions.wellbeingDay3,
+      aftercareOptions.review,
+      aftercareOptions.videoReview,
+      aftercareOptions.checkupBooking,
+      aftercareOptions.repeatVisit,
+    ].filter(Boolean).length
+
+    if (selectedCount === 0) {
+      setAftercareMessage('Выберите хотя бы одну задачу для менеджера.')
+      return
+    }
+
+    setAftercareLoading(true)
+    setAftercareMessage('')
+    try {
+      const created = await ensurePatientAftercareTasks({
+        patientId,
+        patientName: patient.full_name,
+        sourceType: 'patient',
+        sourceId: `${patientId}:${Date.now()}`,
+        checkupMonths: Number(aftercareMonths),
+        options: {
+          wellbeingDay1: aftercareOptions.wellbeingDay1,
+          wellbeingDay1Delay: Number(aftercareOptions.wellbeingDay1Delay || 1),
+          wellbeingDay3: aftercareOptions.wellbeingDay3,
+          wellbeingDay3Delay: Number(aftercareOptions.wellbeingDay3Delay || 3),
+          review: aftercareOptions.review,
+          reviewDelay: Number(aftercareOptions.reviewDelay || 3),
+          videoReview: aftercareOptions.videoReview,
+          videoReviewDelay: Number(aftercareOptions.videoReviewDelay || 7),
+          checkupBooking: aftercareOptions.checkupBooking,
+          repeatVisit: aftercareOptions.repeatVisit,
+        },
+      })
+      await db.from('contact_history').insert([{
+        patient_id: patientId,
+        type: 'note',
+        direction: 'outgoing',
+        summary: `Запущено автосопровождение после лечения. Сценарий: ${aftercarePreset}. Создано задач: ${created}. Контроль: ${aftercareMonths} мес.`,
+      }])
+      await mutatePatients()
+      await mutateTasks()
+      await mutateContacts()
+      setAftercareMessage(`Готово: создано ${created} задач. Они уже доступны во вкладке “Задачи” пациента и появятся в уведомлениях менеджера по сроку.`)
+    } catch (error) {
+      console.error(error)
+      setAftercareMessage('Не получилось запустить сопровождение. Проверьте данные пациента и попробуйте еще раз.')
+    } finally {
+      setAftercareLoading(false)
+    }
   }
 
   const setField = (key: string, value: any) => setProfile({ ...editable, [key]: value })
@@ -374,9 +502,19 @@ export function PatientProfile({ patientId }: { patientId: string }) {
             <div className="rounded-2xl border bg-gradient-to-br from-teal-50 to-white p-4">
               <Label>Автосопровождение после лечения</Label>
               <p className="mt-1 text-sm text-slate-500">
-                Создаст задачи: проверить самочувствие через 1 и 3 дня, попросить отзыв, фото/видео отзыв, записать на проверку и вернуть на повторный визит.
+                Выберите сценарий под процедуру и поправьте сроки вручную. Для чистки можно убрать самочувствие, для сложного лечения - оставить частый контроль.
               </p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <Select value={aftercarePreset} onValueChange={applyAftercarePreset}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="standard">Стандарт после лечения</SelectItem>
+                    <SelectItem value="hygiene">Чистка / гигиена</SelectItem>
+                    <SelectItem value="surgery">Сложное лечение / хирургия</SelectItem>
+                    <SelectItem value="ortho">Ортодонтия / долгий план</SelectItem>
+                    <SelectItem value="custom">Индивидуально</SelectItem>
+                  </SelectContent>
+                </Select>
                 <Select value={aftercareMonths} onValueChange={setAftercareMonths}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -387,11 +525,58 @@ export function PatientProfile({ patientId }: { patientId: string }) {
                     <SelectItem value="12">Контроль через 12 месяцев</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button onClick={launchAftercare} className="bg-teal-600 hover:bg-teal-700">
-                  <BellRing className="mr-2 h-4 w-4" />
-                  Запустить
+              </div>
+              <div className="mt-3 space-y-2">
+                <AftercareRow
+                  checked={aftercareOptions.wellbeingDay1}
+                  onCheckedChange={(value: boolean) => setAftercareOption('wellbeingDay1', value)}
+                  label="Проверить самочувствие"
+                  value={aftercareOptions.wellbeingDay1Delay}
+                  onValueChange={(value: string) => setAftercareOption('wellbeingDay1Delay', value)}
+                />
+                <AftercareRow
+                  checked={aftercareOptions.wellbeingDay3}
+                  onCheckedChange={(value: boolean) => setAftercareOption('wellbeingDay3', value)}
+                  label="Повторно проверить самочувствие"
+                  value={aftercareOptions.wellbeingDay3Delay}
+                  onValueChange={(value: string) => setAftercareOption('wellbeingDay3Delay', value)}
+                />
+                <AftercareRow
+                  checked={aftercareOptions.review}
+                  onCheckedChange={(value: boolean) => setAftercareOption('review', value)}
+                  label="Попросить отзыв"
+                  value={aftercareOptions.reviewDelay}
+                  onValueChange={(value: string) => setAftercareOption('reviewDelay', value)}
+                />
+                <AftercareRow
+                  checked={aftercareOptions.videoReview}
+                  onCheckedChange={(value: boolean) => setAftercareOption('videoReview', value)}
+                  label="Попросить фото/видео отзыв"
+                  value={aftercareOptions.videoReviewDelay}
+                  onValueChange={(value: string) => setAftercareOption('videoReviewDelay', value)}
+                />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 rounded-xl border bg-white/80 px-3 py-2 text-sm font-medium text-slate-700">
+                    <Checkbox checked={aftercareOptions.checkupBooking} onCheckedChange={(value) => setAftercareOption('checkupBooking', Boolean(value))} />
+                    Записать на контрольный осмотр
+                  </label>
+                  <label className="flex items-center gap-2 rounded-xl border bg-white/80 px-3 py-2 text-sm font-medium text-slate-700">
+                    <Checkbox checked={aftercareOptions.repeatVisit} onCheckedChange={(value) => setAftercareOption('repeatVisit', Boolean(value))} />
+                    Контроль повторного визита
+                  </label>
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button onClick={launchAftercare} disabled={aftercareLoading} className="bg-teal-600 hover:bg-teal-700">
+                  {aftercareLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BellRing className="mr-2 h-4 w-4" />}
+                  {aftercareLoading ? 'Запускаю...' : 'Запустить'}
                 </Button>
               </div>
+              {aftercareMessage && (
+                <div className="mt-3 rounded-xl border border-teal-100 bg-white/80 p-3 text-sm text-slate-700">
+                  {aftercareMessage}
+                </div>
+              )}
             </div>
             <div className="rounded-2xl border bg-white p-4">
               <Label>Новый контакт</Label>
@@ -632,6 +817,40 @@ function StatCard({ label, value, icon: Icon }: any) {
         <div className="rounded-2xl bg-teal-50 p-3 text-teal-700"><Icon className="h-5 w-5" /></div>
       </CardContent>
     </Card>
+  )
+}
+
+function AftercareRow({
+  checked,
+  onCheckedChange,
+  label,
+  value,
+  onValueChange,
+}: {
+  checked: boolean
+  onCheckedChange: (value: boolean) => void
+  label: string
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  return (
+    <div className="grid gap-2 rounded-xl border bg-white/80 p-3 sm:grid-cols-[1fr_118px] sm:items-center">
+      <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+        <Checkbox checked={checked} onCheckedChange={(next) => onCheckedChange(Boolean(next))} />
+        {label}
+      </label>
+      <div className="flex items-center gap-2 text-sm text-slate-500">
+        <Input
+          type="number"
+          min="0"
+          value={value}
+          disabled={!checked}
+          onChange={(event) => onValueChange(event.target.value)}
+          className="h-9"
+        />
+        дн.
+      </div>
+    </div>
   )
 }
 

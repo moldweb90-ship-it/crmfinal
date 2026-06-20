@@ -1,13 +1,34 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { addDays, isAfter, isBefore, isSameDay, parseISO, startOfDay } from 'date-fns'
+import {
+  addDays,
+  addMonths,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isAfter,
+  isBefore,
+  isSameDay,
+  isSameMonth,
+  parseISO,
+  startOfDay,
+  startOfMonth,
+  startOfWeek,
+  subMonths,
+} from 'date-fns'
+import { ru } from 'date-fns/locale'
 import {
   CalendarClock,
+  CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Edit3,
   Flag,
+  ListChecks,
   Loader2,
   MoreHorizontal,
   Phone,
@@ -97,6 +118,8 @@ export function TasksBoard() {
   const [priorityFilter, setPriorityFilter] = useState('all')
   const [dateFilter, setDateFilter] = useState('actionable')
   const [sortBy, setSortBy] = useState('due_asc')
+  const [viewMode, setViewMode] = useState<'agenda' | 'calendar'>('agenda')
+  const [calendarMonth, setCalendarMonth] = useState(startOfMonth(new Date()))
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(emptyTask)
@@ -255,8 +278,27 @@ export function TasksBoard() {
       .filter((section) => section.tasks.length > 0)
   }, [filtered, patients, leads])
 
+  const calendarDays = useMemo(() => {
+    const start = startOfWeek(startOfMonth(calendarMonth), { weekStartsOn: 1 })
+    const end = endOfWeek(endOfMonth(calendarMonth), { weekStartsOn: 1 })
+    return eachDayOfInterval({ start, end })
+  }, [calendarMonth])
+
+  const activeCalendarTasks = useMemo(() => (
+    tasks
+      .filter((task: any) => !isClosed(task) && taskDate(task))
+      .sort((a: any, b: any) => new Date(taskDueValue(a)).getTime() - new Date(taskDueValue(b)).getTime())
+  ), [tasks])
+
   const openCreate = () => {
     setForm(emptyTask)
+    setOpen(true)
+  }
+
+  const openCreateForDay = (day: Date) => {
+    const due = new Date(day)
+    due.setHours(10, 0, 0, 0)
+    setForm({ ...emptyTask, due_at: due.toISOString().slice(0, 16) })
     setOpen(true)
   }
 
@@ -307,6 +349,14 @@ export function TasksBoard() {
     mutate()
   }
 
+  const rescheduleTask = async (task: any, date: Date) => {
+    const current = taskDate(task)
+    const next = new Date(date)
+    next.setHours(current?.getHours() ?? 10, current?.getMinutes() ?? 0, 0, 0)
+    await db.from('tasks').update({ due_at: next.toISOString(), status: task.status === 'done' ? 'open' : task.status }).eq('id', task.id)
+    mutate()
+  }
+
   const deleteTask = async (task: any) => {
     const ok = window.confirm(`Удалить задачу "${task.title}"?`)
     if (!ok) return
@@ -354,6 +404,26 @@ export function TasksBoard() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 rounded-2xl border bg-white p-1 shadow-sm">
+            <Button
+              type="button"
+              variant={viewMode === 'agenda' ? 'default' : 'ghost'}
+              onClick={() => setViewMode('agenda')}
+              className={cn('h-9 rounded-xl', viewMode === 'agenda' && 'bg-slate-950 text-white hover:bg-slate-900')}
+            >
+              <ListChecks className="mr-2 h-4 w-4" />
+              Повестка
+            </Button>
+            <Button
+              type="button"
+              variant={viewMode === 'calendar' ? 'default' : 'ghost'}
+              onClick={() => setViewMode('calendar')}
+              className={cn('h-9 rounded-xl', viewMode === 'calendar' && 'bg-teal-600 text-white hover:bg-teal-700')}
+            >
+              <CalendarDays className="mr-2 h-4 w-4" />
+              Календарь
+            </Button>
+          </div>
           <Button onClick={openCreate} className="h-11 rounded-2xl bg-gradient-to-r from-teal-500 to-sky-500 text-white hover:from-teal-600 hover:to-sky-600">
             <Plus className="mr-2 h-4 w-4" />
             Задача
@@ -425,11 +495,102 @@ export function TasksBoard() {
         </CardContent>
       </Card>
 
+      {viewMode === 'calendar' && (
+        <Card className="crm-panel overflow-hidden border-0">
+          <CardHeader className="flex flex-col gap-3 border-b bg-gradient-to-br from-white via-cyan-50 to-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-teal-600" />
+                Календарь задач
+              </CardTitle>
+              <p className="mt-1 text-sm text-slate-500">Клик по дню создает задачу на 10:00. Клик по задаче открывает редактирование и перенос.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon" className="rounded-xl bg-white" onClick={() => setCalendarMonth(subMonths(calendarMonth, 1))}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" className="min-w-[180px] rounded-xl bg-white" onClick={() => setCalendarMonth(startOfMonth(new Date()))}>
+                {format(calendarMonth, 'LLLL yyyy', { locale: ru })}
+              </Button>
+              <Button variant="outline" size="icon" className="rounded-xl bg-white" onClick={() => setCalendarMonth(addMonths(calendarMonth, 1))}>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="grid grid-cols-7 border-b bg-slate-50 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+              {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((day) => (
+                <div key={day} className="border-r px-2 py-3 last:border-r-0">{day}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-7">
+              {calendarDays.map((day) => {
+                const dayTasks = activeCalendarTasks.filter((task: any) => {
+                  const due = taskDate(task)
+                  return due && isSameDay(due, day)
+                })
+                const inMonth = isSameMonth(day, calendarMonth)
+                const isToday = isSameDay(day, today)
+
+                return (
+                  <div
+                    key={day.toISOString()}
+                    className={cn(
+                      'min-h-[132px] border-b border-r bg-white p-2 transition hover:bg-teal-50/40 sm:min-h-[154px]',
+                      !inMonth && 'bg-slate-50/70 text-slate-400',
+                      isToday && 'bg-cyan-50/70'
+                    )}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openCreateForDay(day)}
+                        className={cn(
+                          'flex h-8 min-w-8 items-center justify-center rounded-xl px-2 text-sm font-semibold transition hover:bg-white hover:shadow-sm',
+                          isToday && 'bg-teal-600 text-white hover:bg-teal-700'
+                        )}
+                      >
+                        {format(day, 'd')}
+                      </button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-slate-400 hover:text-teal-700" onClick={() => openCreateForDay(day)}>
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <div className="space-y-1">
+                      {dayTasks.slice(0, 4).map((task: any) => {
+                        const actor = actorFor(task)
+                        const priority = priorityConfig[task.priority] || priorityConfig.normal
+                        const due = taskDate(task)
+                        return (
+                          <button
+                            key={task.id}
+                            type="button"
+                            onClick={() => openEdit(task)}
+                            className="w-full rounded-xl border bg-white px-2 py-1.5 text-left text-xs shadow-sm transition hover:border-teal-200 hover:shadow"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate font-semibold text-slate-900">{due ? format(due, 'HH:mm') : ''} {task.title}</span>
+                              <span className={cn('h-2 w-2 shrink-0 rounded-full', priority.rank >= 3 ? 'bg-amber-500' : 'bg-teal-500')} />
+                            </div>
+                            <div className="mt-0.5 truncate text-slate-500">{actor.name}</div>
+                          </button>
+                        )
+                      })}
+                      {dayTasks.length > 4 && <div className="px-2 text-xs font-medium text-slate-500">+{dayTasks.length - 4} еще</div>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="flex h-64 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
         </div>
-      ) : (
+      ) : viewMode === 'agenda' ? (
         <div className="space-y-4">
           {agendaSections.length === 0 ? (
             <Card className="crm-panel border-0">
@@ -490,6 +651,7 @@ export function TasksBoard() {
                           onEdit={() => openEdit(task)}
                           onDelete={() => deleteTask(task)}
                           onStatus={setStatus}
+                          onReschedule={rescheduleTask}
                           compact
                           hideActor
                         />
@@ -501,7 +663,7 @@ export function TasksBoard() {
             </section>
           ))}
         </div>
-      )}
+      ) : null}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-[620px]">
@@ -595,7 +757,7 @@ export function TasksBoard() {
   )
 }
 
-function TaskCard({ task, patient, lead, onEdit, onDelete, onStatus, compact, hideActor }: any) {
+function TaskCard({ task, patient, lead, onEdit, onDelete, onStatus, onReschedule, compact, hideActor }: any) {
   const status = statusConfig[task.status] || statusConfig.open || taskStatuses.open
   const priority = priorityConfig[task.priority] || priorityConfig.normal
   const dueValue = taskDueValue(task)
@@ -632,6 +794,8 @@ function TaskCard({ task, patient, lead, onEdit, onDelete, onStatus, compact, hi
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={onEdit}><Edit3 className="h-4 w-4" />Редактировать</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onReschedule(task, addDays(new Date(), 1))}><ChevronRight className="h-4 w-4" />Перенести на завтра</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onReschedule(task, addDays(new Date(), 7))}><CalendarDays className="h-4 w-4" />Перенести на 7 дней</DropdownMenuItem>
               <DropdownMenuItem onClick={() => onStatus(task.id, 'open')}><Clock className="h-4 w-4" />Открытая</DropdownMenuItem>
               <DropdownMenuItem onClick={() => onStatus(task.id, 'in_progress')}><CalendarClock className="h-4 w-4" />В работу</DropdownMenuItem>
               <DropdownMenuItem onClick={() => onStatus(task.id, 'done')}><Check className="h-4 w-4" />Готово</DropdownMenuItem>

@@ -7,6 +7,18 @@ type AftercareSource = {
   sourceType: 'appointment' | 'treatment_plan' | 'patient'
   sourceId?: string
   checkupMonths?: number
+  options?: {
+    wellbeingDay1?: boolean
+    wellbeingDay1Delay?: number
+    wellbeingDay3?: boolean
+    wellbeingDay3Delay?: number
+    review?: boolean
+    reviewDelay?: number
+    videoReview?: boolean
+    videoReviewDelay?: number
+    checkupBooking?: boolean
+    repeatVisit?: boolean
+  }
 }
 
 type LeadStatusAutomationSource = {
@@ -49,39 +61,56 @@ export async function ensurePatientAftercareTasks({
   sourceType,
   sourceId = patientId,
   checkupMonths = 6,
+  options = {},
 }: AftercareSource) {
   const baseKey = `${sourceType}:${sourceId}:aftercare`
   const now = new Date()
   const checkupDate = atWorkTime(addMonths(now, checkupMonths), 10, 0)
+  const settings = {
+    wellbeingDay1: options.wellbeingDay1 ?? true,
+    wellbeingDay1Delay: options.wellbeingDay1Delay ?? 1,
+    wellbeingDay3: options.wellbeingDay3 ?? true,
+    wellbeingDay3Delay: options.wellbeingDay3Delay ?? 3,
+    review: options.review ?? true,
+    reviewDelay: options.reviewDelay ?? 3,
+    videoReview: options.videoReview ?? true,
+    videoReviewDelay: options.videoReviewDelay ?? 7,
+    checkupBooking: options.checkupBooking ?? true,
+    repeatVisit: options.repeatVisit ?? true,
+  }
 
   const templates = [
     {
       automation_key: `${baseKey}:wellbeing-day-1`,
       title: `Проверить самочувствие: ${patientName}`,
       description: 'Позвонить пациенту после лечения: боль, отек, температура, выполняет ли рекомендации. Если есть жалобы - передать врачу.',
-      due_at: atWorkTime(addDays(now, 1), 10, 0).toISOString(),
+      due_at: atWorkTime(addDays(now, settings.wellbeingDay1Delay), 10, 0).toISOString(),
       priority: 'high',
+      enabled: settings.wellbeingDay1,
     },
     {
       automation_key: `${baseKey}:wellbeing-day-3`,
       title: `Повторно проверить самочувствие: ${patientName}`,
-      description: 'Контроль через 3 дня: уточнить динамику, напомнить рекомендации, при необходимости предложить контрольный осмотр.',
-      due_at: atWorkTime(addDays(now, 3), 10, 0).toISOString(),
+      description: `Контроль через ${settings.wellbeingDay3Delay} дн.: уточнить динамику, напомнить рекомендации, при необходимости предложить контрольный осмотр.`,
+      due_at: atWorkTime(addDays(now, settings.wellbeingDay3Delay), 10, 0).toISOString(),
       priority: 'normal',
+      enabled: settings.wellbeingDay3,
     },
     {
       automation_key: `${baseKey}:review-day-3`,
       title: `Попросить отзыв: ${patientName}`,
       description: 'Если пациент доволен лечением - попросить оставить отзыв Google/соцсети. Отправить ссылку и отметить результат в контактах.',
-      due_at: atWorkTime(addDays(now, 3), 12, 0).toISOString(),
+      due_at: atWorkTime(addDays(now, settings.reviewDelay), 12, 0).toISOString(),
       priority: 'normal',
+      enabled: settings.review,
     },
     {
       automation_key: `${baseKey}:video-review-day-7`,
       title: `Попросить фото/видео отзыв: ${patientName}`,
       description: 'Подходит для довольных пациентов после заметного результата. Предложить короткий видео/фото отзыв или согласие на кейс.',
-      due_at: atWorkTime(addDays(now, 7), 12, 0).toISOString(),
+      due_at: atWorkTime(addDays(now, settings.videoReviewDelay), 12, 0).toISOString(),
       priority: 'low',
+      enabled: settings.videoReview,
     },
     {
       automation_key: `${baseKey}:checkup-booking`,
@@ -89,6 +118,7 @@ export async function ensurePatientAftercareTasks({
       description: `Поставить пациента в расписание на проверку. Рекомендуемый срок контроля: через ${checkupMonths} мес.`,
       due_at: atWorkTime(addMonths(now, Math.max(1, checkupMonths - 1)), 10, 0).toISOString(),
       priority: 'normal',
+      enabled: settings.checkupBooking,
     },
     {
       automation_key: `${baseKey}:repeat-visit-${checkupMonths}-months`,
@@ -96,13 +126,15 @@ export async function ensurePatientAftercareTasks({
       description: 'Связаться с пациентом, напомнить о профилактике/контрольном осмотре и предложить удобное время записи.',
       due_at: checkupDate.toISOString(),
       priority: 'high',
+      enabled: settings.repeatVisit,
     },
-  ]
+  ].filter((task) => task.enabled)
 
   let created = 0
   for (const task of templates) {
+    const { enabled, ...payload } = task
     const ok = await createAutomatedTask({
-      ...task,
+      ...payload,
       patient_id: patientId,
       source_type: sourceType,
       source_id: sourceId,
@@ -111,8 +143,8 @@ export async function ensurePatientAftercareTasks({
   }
 
   await db.from('patients').update({
-    planned_checkup_at: checkupDate.toISOString().slice(0, 10),
-    next_follow_up_at: templates[0].due_at,
+    planned_checkup_at: settings.repeatVisit || settings.checkupBooking ? checkupDate.toISOString().slice(0, 10) : null,
+    next_follow_up_at: templates[0]?.due_at || null,
     status: 'needs_follow_up',
     aftercare_started_at: now.toISOString(),
     aftercare_checkup_months: checkupMonths,
