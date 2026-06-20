@@ -19,6 +19,7 @@ import {
   subMonths,
 } from 'date-fns'
 import { ru } from 'date-fns/locale'
+import Link from 'next/link'
 import {
   CalendarClock,
   CalendarDays,
@@ -27,9 +28,11 @@ import {
   ChevronRight,
   Clock,
   Edit3,
+  ExternalLink,
   Flag,
   ListChecks,
   Loader2,
+  MessageCircle,
   MoreHorizontal,
   Phone,
   Plus,
@@ -53,7 +56,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useLeads, usePatients, useTasks } from '@/lib/hooks'
+import { useJivoConversations, useLeads, usePatients, useTasks } from '@/lib/hooks'
 import { db } from '@/lib/insforge'
 import { dateLabel, taskStatuses } from '@/lib/crm'
 import { cn } from '@/lib/utils'
@@ -66,6 +69,17 @@ type TaskActor = {
   kind: string
 }
 type TaskGroup = { actor: TaskActor; tasks: any[] }
+
+type TaskContact = {
+  name: string
+  phone?: string
+  email?: string
+  source?: string
+  channel?: string
+  chatId?: string
+  patientId?: string
+  jivo?: any
+}
 
 const priorityConfig: Record<string, { label: string; tone: string; rank: number }> = {
   low: { label: 'Низкий', tone: 'bg-slate-100 text-slate-600 border-slate-200', rank: 1 },
@@ -113,6 +127,7 @@ export function TasksBoard() {
   const { tasks, isLoading, mutate } = useTasks()
   const { patients } = usePatients()
   const { leads } = useLeads()
+  const { conversations } = useJivoConversations()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('active')
   const [priorityFilter, setPriorityFilter] = useState('all')
@@ -132,17 +147,51 @@ export function TasksBoard() {
 
   const patientById = (id?: string | null) => patients.find((patient: any) => patient.id === id)
   const leadById = (id?: string | null) => leads.find((lead: any) => lead.id === id)
+  const jivoByTask = (task?: any) => {
+    if (!task) return null
+    return conversations.find((conversation: any) => (
+      (task.jivo_conversation_id && conversation.id === task.jivo_conversation_id)
+      || (task.jivo_chat_id && conversation.jivo_chat_id === task.jivo_chat_id)
+      || (task.jivo_client_id && conversation.jivo_client_id === task.jivo_client_id)
+    )) || null
+  }
+  const contactForTask = (task?: any): TaskContact | null => {
+    if (!task) return null
+    const patient = patientById(task.patient_id)
+    const lead = leadById(task.lead_id)
+    const jivo = jivoByTask(task)
+    const name = patient?.full_name || lead?.name || jivo?.client_name || task.client_name || ''
+    const phone = patient?.phone || lead?.phone || jivo?.client_phone || task.client_phone || ''
+    const email = patient?.email || lead?.email || jivo?.client_email || task.client_email || ''
+    const source = patient?.source || lead?.source || jivo?.source || (task.source_type === 'jivo' ? 'Jivo' : '')
+    const channel = jivo?.channel || task.jivo_channel || ''
+    const chatId = task.jivo_chat_id || jivo?.jivo_chat_id || ''
+
+    if (!name && !phone && !email && !source && !chatId) return null
+
+    return {
+      name: name || 'Клиент',
+      phone,
+      email,
+      source,
+      channel,
+      chatId,
+      patientId: patient?.id || task.patient_id || jivo?.crm_patient_id || '',
+      jivo,
+    }
+  }
 
   const actorFor = (task: any) => {
     const patient = patientById(task.patient_id)
     const lead = leadById(task.lead_id)
+    const jivo = jivoByTask(task)
 
     if (patient) {
       return {
         key: `patient:${patient.id}`,
         name: patient.full_name || 'Пациент',
-        phone: patient.phone,
-        source: patient.source,
+        phone: patient.phone || jivo?.client_phone,
+        source: patient.source || jivo?.channel || jivo?.source,
         kind: 'Пациент',
       }
     }
@@ -151,9 +200,20 @@ export function TasksBoard() {
       return {
         key: `lead:${lead.id}`,
         name: lead.name || 'Заявка',
-        phone: lead.phone,
-        source: lead.source,
+        phone: lead.phone || jivo?.client_phone,
+        source: lead.source || jivo?.channel || jivo?.source,
         kind: 'Заявка',
+      }
+    }
+
+    if (jivo || task.source_type === 'jivo') {
+      const fallbackKey = task.jivo_conversation_id || task.jivo_chat_id || jivo?.id || task.id
+      return {
+        key: `jivo:${fallbackKey}`,
+        name: jivo?.client_name || task.client_name || 'Клиент из Jivo',
+        phone: jivo?.client_phone || task.client_phone,
+        source: jivo?.channel || jivo?.source || 'Jivo',
+        kind: 'Jivo',
       }
     }
 
@@ -174,7 +234,8 @@ export function TasksBoard() {
         const patient = patientById(task.patient_id)
         const lead = leadById(task.lead_id)
         const due = taskDate(task)
-        const haystack = `${task.title || ''} ${task.description || ''} ${patient?.full_name || ''} ${patient?.phone || ''} ${lead?.name || ''} ${lead?.phone || ''}`.toLowerCase()
+        const jivo = jivoByTask(task)
+        const haystack = `${task.title || ''} ${task.description || ''} ${patient?.full_name || ''} ${patient?.phone || ''} ${lead?.name || ''} ${lead?.phone || ''} ${jivo?.client_name || ''} ${jivo?.client_phone || ''} ${jivo?.channel || ''} ${task.jivo_chat_id || ''}`.toLowerCase()
 
         if (normalizedQuery && !haystack.includes(normalizedQuery)) return false
         if (statusFilter === 'active' && isClosed(task)) return false
@@ -197,7 +258,7 @@ export function TasksBoard() {
         const bDue = taskDueValue(b) ? new Date(taskDueValue(b)).getTime() : Number.MAX_SAFE_INTEGER
         return sortBy === 'due_desc' ? bDue - aDue : aDue - bDue
       })
-  }, [tasks, query, statusFilter, priorityFilter, dateFilter, sortBy, patients, leads])
+  }, [tasks, query, statusFilter, priorityFilter, dateFilter, sortBy, patients, leads, conversations])
 
   const agendaSections = useMemo(() => {
     const sectionDefs = [
@@ -276,7 +337,7 @@ export function TasksBoard() {
         return { ...section, tasks: sectionTasks, groups }
       })
       .filter((section) => section.tasks.length > 0)
-  }, [filtered, patients, leads])
+  }, [filtered, patients, leads, conversations])
 
   const calendarDays = useMemo(() => {
     const start = startOfWeek(startOfMonth(calendarMonth), { weekStartsOn: 1 })
@@ -315,6 +376,9 @@ export function TasksBoard() {
     })
     setOpen(true)
   }
+
+  const editingTask = form.id ? tasks.find((item: any) => item.id === form.id) : null
+  const editingContact = editingTask ? contactForTask(editingTask) : null
 
   const saveTask = async () => {
     if (!form.title.trim()) return
@@ -648,6 +712,7 @@ export function TasksBoard() {
                           task={task}
                           patient={patientById(task.patient_id)}
                           lead={leadById(task.lead_id)}
+                          contact={contactForTask(task)}
                           onEdit={() => openEdit(task)}
                           onDelete={() => deleteTask(task)}
                           onStatus={setStatus}
@@ -687,6 +752,58 @@ export function TasksBoard() {
                 placeholder="Контекст, что уточнить, что обещали"
               />
             </div>
+            {editingContact && (
+              <div className="rounded-2xl border border-teal-100 bg-gradient-to-br from-teal-50 via-white to-sky-50 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.12em] text-teal-700">
+                      <MessageCircle className="h-4 w-4" />
+                      Контакт клиента
+                    </div>
+                    <div className="mt-1 text-lg font-semibold text-slate-950">{editingContact.name}</div>
+                  </div>
+                  {editingContact.patientId && (
+                    <Button asChild variant="outline" size="sm" className="rounded-xl bg-white">
+                      <Link href={`/patients/${editingContact.patientId}`}>
+                        Карточка
+                        <ExternalLink className="ml-2 h-3.5 w-3.5" />
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {editingContact.phone ? (
+                    <a
+                      href={`tel:${editingContact.phone}`}
+                      className="inline-flex items-center gap-2 rounded-2xl border border-teal-200 bg-white px-3 py-2 font-semibold text-teal-800 transition hover:bg-teal-50"
+                    >
+                      <Phone className="h-4 w-4" />
+                      {editingContact.phone}
+                    </a>
+                  ) : (
+                    <div className="inline-flex items-center gap-2 rounded-2xl border bg-white px-3 py-2 text-slate-500">
+                      <Phone className="h-4 w-4" />
+                      Телефон не указан
+                    </div>
+                  )}
+                  <div className="rounded-2xl border bg-white px-3 py-2 text-sm text-slate-600">
+                    <span className="text-slate-400">Источник:</span>{' '}
+                    <span className="font-medium text-slate-800">{editingContact.channel || editingContact.source || 'Jivo'}</span>
+                  </div>
+                  {editingContact.email && (
+                    <a href={`mailto:${editingContact.email}`} className="rounded-2xl border bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                      {editingContact.email}
+                    </a>
+                  )}
+                  {editingContact.chatId && (
+                    <div className="rounded-2xl border bg-white px-3 py-2 text-sm text-slate-600">
+                      <span className="text-slate-400">Диалог Jivo:</span>{' '}
+                      <span className="font-mono font-semibold text-slate-800">{editingContact.chatId}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="grid gap-4 md:grid-cols-3">
               <div className="grid gap-2">
                 <Label>Дедлайн</Label>
@@ -757,13 +874,13 @@ export function TasksBoard() {
   )
 }
 
-function TaskCard({ task, patient, lead, onEdit, onDelete, onStatus, onReschedule, compact, hideActor }: any) {
+function TaskCard({ task, patient, lead, contact, onEdit, onDelete, onStatus, onReschedule, compact, hideActor }: any) {
   const status = statusConfig[task.status] || statusConfig.open || taskStatuses.open
   const priority = priorityConfig[task.priority] || priorityConfig.normal
   const dueValue = taskDueValue(task)
   const due = taskDate(task)
   const overdue = task.status !== 'done' && task.status !== 'cancelled' && due && isBefore(due, startOfDay(new Date()))
-  const phone = patient?.phone || lead?.phone
+  const phone = patient?.phone || lead?.phone || contact?.phone
 
   return (
     <div className={cn(
@@ -837,6 +954,26 @@ function TaskCard({ task, patient, lead, onEdit, onDelete, onStatus, onReschedul
           </a>
         )}
       </div>
+
+      {contact && task.source_type === 'jivo' && (
+        <div className="mt-3 rounded-2xl border border-teal-100 bg-teal-50/60 p-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="border-teal-200 bg-white text-teal-700">
+              <MessageCircle className="mr-1 h-3 w-3" />
+              Jivo
+            </Badge>
+            <span className="font-semibold text-slate-900">{contact.name}</span>
+            {contact.phone && (
+              <a href={`tel:${contact.phone}`} className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-white px-2.5 py-1 font-semibold text-teal-800">
+                <Phone className="h-3.5 w-3.5" />
+                {contact.phone}
+              </a>
+            )}
+            {(contact.channel || contact.source) && <span className="rounded-full border bg-white px-2.5 py-1 text-slate-600">{contact.channel || contact.source}</span>}
+            {contact.chatId && <span className="rounded-full border bg-white px-2.5 py-1 font-mono text-xs text-slate-500">#{contact.chatId}</span>}
+          </div>
+        </div>
+      )}
 
       {task.status !== 'done' && task.status !== 'cancelled' && (
         <div className="mt-4 flex flex-wrap gap-2">

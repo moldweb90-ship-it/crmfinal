@@ -396,6 +396,8 @@ function JivoActionDialog({
   doctors,
   clinics,
   patients,
+  tasks,
+  contacts,
   onDone,
 }: {
   open: boolean
@@ -464,6 +466,13 @@ function JivoActionDialog({
 
   const saveContact = async (patientId: string | null, summary: string) => {
     if (!patientId) return
+    const alreadyExists = contacts.some((contact: any) => (
+      contact.patient_id === patientId
+      && contact.jivo_chat_id === (conversation?.jivo_chat_id || null)
+      && contact.summary === summary
+    ))
+    if (alreadyExists) return
+
     await db.from('contact_history').insert([{
       patient_id: patientId,
       type: 'jivo',
@@ -505,14 +514,19 @@ function JivoActionDialog({
         }]).select()
         appointmentId = appointment.data?.[0]?.id || null
         await saveContact(patientId, `Jivo: клиент доведен до записи на ${format(start, 'dd.MM.yyyy HH:mm')}`)
+      } else if (mode === 'rejected') {
+        await saveContact(patientId, `Jivo: отказ клиента${form.comment ? ` - ${form.comment}` : ''}`)
       } else {
         const titles: Record<string, string> = {
           thinking: `Дожать после Jivo: ${form.patient_name || conversation.client_name}`,
           callback: `Перезвонить после Jivo: ${form.patient_name || conversation.client_name}`,
           no_answer: `Повторно связаться после Jivo: ${form.patient_name || conversation.client_name}`,
-          rejected: `Разобрать отказ Jivo: ${form.patient_name || conversation.client_name}`,
         }
-        const task = await db.from('tasks').insert([{
+        const existingTask = tasks.find((task: any) => (
+          task.id === conversation.crm_task_id
+          || (task.jivo_conversation_id === conversation.id && task.source_type === 'jivo' && task.status !== 'done' && task.status !== 'cancelled')
+        ))
+        const taskPayload = {
           title: titles[mode] || `Связаться после Jivo: ${form.patient_name || conversation.client_name}`,
           description: form.comment || `Диалог Jivo: ${conversation.jivo_chat_id || conversation.id}`,
           due_at: form.task_due ? new Date(form.task_due).toISOString() : addDays(new Date(), 1).toISOString(),
@@ -522,8 +536,15 @@ function JivoActionDialog({
           source_type: 'jivo',
           jivo_chat_id: conversation.jivo_chat_id || null,
           jivo_conversation_id: conversation.id,
-        }]).select()
-        taskId = task.data?.[0]?.id || null
+        }
+
+        if (existingTask) {
+          await db.from('tasks').update(taskPayload).eq('id', existingTask.id)
+          taskId = existingTask.id
+        } else {
+          const task = await db.from('tasks').insert([taskPayload]).select()
+          taskId = task.data?.[0]?.id || null
+        }
         await saveContact(patientId, `Jivo: результат обработки - ${outcomeLabels[mode] || mode}`)
       }
 
@@ -644,10 +665,14 @@ function JivoActionDialog({
                 <Input value={form.service_name} onChange={(event) => setForm({ ...form, service_name: event.target.value })} />
               </div>
             </div>
-          ) : (
+          ) : mode !== 'rejected' ? (
             <div className="space-y-2">
               <Label>Когда напомнить менеджеру</Label>
               <Input type="datetime-local" value={form.task_due} onChange={(event) => setForm({ ...form, task_due: event.target.value })} />
+            </div>
+          ) : (
+            <div className="rounded-3xl border border-rose-100 bg-rose-50 p-4 text-sm text-rose-700">
+              Отказ будет сохранен в истории пациента и KPI Jivo, но задача менеджеру не создается.
             </div>
           )}
 
