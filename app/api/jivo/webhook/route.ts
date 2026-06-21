@@ -90,6 +90,7 @@ function normalizeJivoPayload(payload: any) {
       client_name: visitor?.name || event?.name || 'Клиент из Jivo',
       client_phone: visitor?.phone || event?.phone || '',
       status,
+      last_event_at: eventAt,
       started_at: startedAt,
       accepted_at: acceptedAt,
       first_response_at: firstResponseAt,

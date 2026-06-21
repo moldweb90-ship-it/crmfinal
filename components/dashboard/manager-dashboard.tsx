@@ -25,7 +25,7 @@ import { patientFocusReason, sourceLabel } from '@/lib/patient-crm'
 import { AddLeadDialog } from '@/components/leads/add-lead-dialog'
 import { AddAppointmentDialog } from '@/components/appointments/add-appointment-dialog'
 import { db } from '@/lib/insforge'
-import { AreaTrendChart, DonutChart, RadialScore, SoftBarChart } from './charts'
+import { DonutChart, RadialScore, SoftBarChart } from './charts'
 import { buildManagerKpi, formatSeconds } from '@/lib/manager-kpi'
 
 const quickActions = [
@@ -72,13 +72,36 @@ export function ManagerDashboard() {
   const conversion = leads.length ? Math.round((leads.filter((lead: any) => ['scheduled', 'came', 'converted'].includes(lead.status)).length / leads.length) * 100) : 0
   const managerKpi = buildManagerKpi({ range: 'today', managers, conversations, leads, appointments, payments })
   const weekDays = Array.from({ length: 7 }, (_, index) => subDays(new Date(), 6 - index))
+  const uniqueJivoConversations = Array.from(new Map(conversations.map((item: any) => [item.jivo_chat_id || item.id, item])).values())
   const leadTrendRaw = weekDays.map((day) => leads.filter((lead: any) => lead.created_at && isSameDay(parseISO(lead.created_at), day)).length)
+  const jivoTrendRaw = weekDays.map((day) => uniqueJivoConversations.filter((item: any) => {
+    const date = item.started_at || item.created_at
+    return date && isSameDay(parseISO(date), day)
+  }).length)
   const appointmentTrendRaw = weekDays.map((day) => appointments.filter((appt: any) => appt.start_time && isSameDay(parseISO(appt.start_time), day)).length)
-  const leadTrend = leadTrendRaw.some(Boolean) ? leadTrendRaw : [2, 4, 3, 6, 5, 7, 6]
-  const appointmentTrend = appointmentTrendRaw.some(Boolean) ? appointmentTrendRaw : [3, 5, 4, 7, 6, 8, 5]
   const trendLabels = weekDays.map((day) => format(day, 'EEEEE', { locale: ru }).toUpperCase())
-  const areaData = trendLabels.map((label, index) => ({ label, value: leadTrend[index] }))
-  const barData = trendLabels.map((label, index) => ({ label, value: appointmentTrend[index] }))
+  const requestTrend = weekDays.map((day, index) => ({
+    date: day,
+    label: format(day, 'd MMM', { locale: ru }),
+    shortLabel: trendLabels[index],
+    leads: leadTrendRaw[index],
+    jivo: jivoTrendRaw[index],
+    value: leadTrendRaw[index] + jivoTrendRaw[index],
+  }))
+  const previousWeekDays = Array.from({ length: 7 }, (_, index) => subDays(new Date(), 13 - index))
+  const previousRequests = previousWeekDays.reduce((sum, day) => {
+    const crm = leads.filter((lead: any) => lead.created_at && isSameDay(parseISO(lead.created_at), day)).length
+    const jivo = uniqueJivoConversations.filter((item: any) => {
+      const date = item.started_at || item.created_at
+      return date && isSameDay(parseISO(date), day)
+    }).length
+    return sum + crm + jivo
+  }, 0)
+  const requestTotal = requestTrend.reduce((sum, item) => sum + item.value, 0)
+  const requestToday = requestTrend[requestTrend.length - 1]?.value || 0
+  const requestBestDay = requestTrend.reduce((best, item) => item.value > best.value ? item : best, requestTrend[0])
+  const requestDelta = previousRequests ? Math.round(((requestTotal - previousRequests) / previousRequests) * 100) : null
+  const barData = trendLabels.map((label, index) => ({ label, value: appointmentTrendRaw[index] }))
   const sourceColors = ['#14b8a6', '#38bdf8', '#22c55e', '#a78bfa', '#f59e0b', '#fb7185']
   const sourceCounts = [...leads, ...patients].reduce((acc: Record<string, number>, item: any) => {
     const key = item.source || 'unknown'
@@ -202,18 +225,35 @@ export function ManagerDashboard() {
 
       <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
         <Card className="crm-panel border-0">
-          <CardHeader className="flex flex-row items-start justify-between space-y-0">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-xl text-slate-950">
-                <TrendingUp className="h-5 w-5 text-teal-600" />
-                Динамика заявок
-              </CardTitle>
-              <p className="text-sm text-slate-500">Линейный график с областью за последние 7 дней.</p>
+          <CardHeader className="space-y-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-xl text-slate-950">
+                  <TrendingUp className="h-5 w-5 text-teal-600" />
+                  Динамика заявок
+                </CardTitle>
+                <p className="text-sm text-slate-500">Реальные обращения за 7 дней: заявки CRM + диалоги Jivo.</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="rounded-2xl border bg-white px-3 py-2">
+                  <div className="text-xs text-slate-500">7 дней</div>
+                  <div className="font-semibold text-slate-950">{requestTotal}</div>
+                </div>
+                <div className="rounded-2xl border bg-white px-3 py-2">
+                  <div className="text-xs text-slate-500">Сегодня</div>
+                  <div className="font-semibold text-teal-700">{requestToday}</div>
+                </div>
+                <div className="rounded-2xl border bg-white px-3 py-2">
+                  <div className="text-xs text-slate-500">К прошлой</div>
+                  <div className={requestDelta == null ? 'font-semibold text-slate-400' : requestDelta >= 0 ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-600'}>
+                    {requestDelta == null ? '-' : `${requestDelta > 0 ? '+' : ''}${requestDelta}%`}
+                  </div>
+                </div>
+              </div>
             </div>
-            <Badge variant="outline" className="border-teal-200 bg-teal-50 text-teal-700">area chart</Badge>
           </CardHeader>
           <CardContent>
-            <AreaTrendChart data={areaData} />
+            <RequestDynamicsChart data={requestTrend} bestDay={requestBestDay} />
           </CardContent>
         </Card>
 
@@ -257,7 +297,9 @@ export function ManagerDashboard() {
         <Card className="crm-panel border-0">
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <div>
-              <CardTitle className="text-xl text-slate-950">Сегодня в клинике</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-xl text-slate-950">
+                Сегодня в клинике
+              </CardTitle>
               <p className="text-sm text-slate-500">Записи, которые менеджеру важно держать на радаре.</p>
             </div>
             <Button asChild variant="outline" className="rounded-xl">
@@ -528,6 +570,102 @@ function AttentionRow({ icon: Icon, label, value, href, danger = false }: any) {
       </div>
       <span className={`text-lg font-semibold ${danger && value > 0 ? 'text-rose-600' : 'text-slate-950'}`}>{value}</span>
     </Link>
+  )
+}
+
+function RequestDynamicsChart({ data, bestDay }: { data: any[]; bestDay: any }) {
+  const width = 760
+  const height = 250
+  const padding = { top: 22, right: 26, bottom: 50, left: 42 }
+  const max = Math.max(1, ...data.map((item) => item.value))
+  const plotWidth = width - padding.left - padding.right
+  const plotHeight = height - padding.top - padding.bottom
+  const points = data.map((item, index) => {
+    const x = padding.left + (data.length > 1 ? (plotWidth / (data.length - 1)) * index : plotWidth / 2)
+    const y = padding.top + plotHeight - (item.value / max) * plotHeight
+    return { ...item, x, y }
+  })
+  const line = points.map((point) => `${point.x},${point.y}`).join(' ')
+  const area = `${padding.left},${height - padding.bottom} ${line} ${width - padding.right},${height - padding.bottom}`
+  const hasData = data.some((item) => item.value > 0)
+  const gridValues = [1, 0.66, 0.33]
+
+  return (
+    <div className="overflow-hidden rounded-[1.75rem] border border-teal-100 bg-gradient-to-br from-white via-cyan-50/70 to-teal-50/80 p-4">
+      <div className="mb-4 grid gap-2 sm:grid-cols-3">
+        <div className="rounded-2xl bg-white/80 px-3 py-2">
+          <div className="text-xs text-slate-500">CRM-заявки</div>
+          <div className="text-lg font-semibold text-slate-950">{data.reduce((sum, item) => sum + item.leads, 0)}</div>
+        </div>
+        <div className="rounded-2xl bg-white/80 px-3 py-2">
+          <div className="text-xs text-slate-500">Jivo-обращения</div>
+          <div className="text-lg font-semibold text-sky-700">{data.reduce((sum, item) => sum + item.jivo, 0)}</div>
+        </div>
+        <div className="rounded-2xl bg-white/80 px-3 py-2">
+          <div className="text-xs text-slate-500">Пиковый день</div>
+          <div className="truncate text-lg font-semibold text-teal-700">{bestDay?.value ? `${bestDay.label}: ${bestDay.value}` : '-'}</div>
+        </div>
+      </div>
+
+      <div className="relative min-h-[250px]">
+        {!hasData && (
+          <div className="absolute inset-0 z-10 grid place-items-center rounded-3xl border border-dashed border-teal-200 bg-white/75 text-center">
+            <div>
+              <div className="text-base font-semibold text-slate-800">За 7 дней заявок нет</div>
+              <div className="mt-1 text-sm text-slate-500">Когда появятся заявки CRM или Jivo, график заполнится автоматически.</div>
+            </div>
+          </div>
+        )}
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-[250px] w-full">
+          <defs>
+            <linearGradient id="requestAreaFill" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#14b8a6" stopOpacity="0.30" />
+              <stop offset="70%" stopColor="#38bdf8" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+            </linearGradient>
+            <filter id="requestLineGlow" x="-20%" y="-30%" width="140%" height="160%">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          {gridValues.map((ratio) => {
+            const y = padding.top + plotHeight - ratio * plotHeight
+            const label = Math.round(max * ratio)
+            return (
+              <g key={ratio}>
+                <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="#dbeafe" strokeDasharray="6 9" />
+                <text x={padding.left - 12} y={y + 4} textAnchor="end" className="fill-slate-400 text-[12px]">{label}</text>
+              </g>
+            )
+          })}
+          <polygon points={area} fill="url(#requestAreaFill)" />
+          <polyline points={line} fill="none" stroke="#0f766e" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" filter="url(#requestLineGlow)" />
+          <polyline points={line} fill="none" stroke="#67e8f9" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          {points.map((point) => (
+            <g key={point.label}>
+              <line x1={point.x} x2={point.x} y1={padding.top} y2={height - padding.bottom} stroke="#e2e8f0" strokeWidth="1" opacity="0.55" />
+              <circle cx={point.x} cy={point.y} r={point.value ? 7 : 5} fill="#fff" stroke={point.value ? '#0f766e' : '#cbd5e1'} strokeWidth="3" />
+              {point.value > 0 && (
+                <text x={point.x} y={point.y - 14} textAnchor="middle" className="fill-slate-900 text-[13px] font-semibold">{point.value}</text>
+              )}
+              <text x={point.x} y={height - 23} textAnchor="middle" className="fill-slate-500 text-[12px] font-semibold">{point.shortLabel}</text>
+              <text x={point.x} y={height - 8} textAnchor="middle" className="fill-slate-400 text-[11px]">{point.label}</text>
+            </g>
+          ))}
+        </svg>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-teal-500" /> всего заявок</span>
+          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-sky-400" /> Jivo входит в общий счет</span>
+        </div>
+        <span>Считается по дате создания заявки или началу Jivo-диалога</span>
+      </div>
+    </div>
   )
 }
 

@@ -253,6 +253,8 @@ export async function upsertJivoEvent(eventName: string, conversation: AnyRow, p
         ...conversation,
         manager_id: genericManager ? existing.manager_id : conversation.manager_id,
         manager_name: genericManager ? existing.manager_name : conversation.manager_name,
+        status: conversation.status || existing.status,
+        last_event_at: conversation.last_event_at || existing.last_event_at,
         accepted_at: conversation.accepted_at || existing.accepted_at,
         first_response_at: conversation.first_response_at || existing.first_response_at,
         response_seconds: conversation.response_seconds ?? existing.response_seconds,

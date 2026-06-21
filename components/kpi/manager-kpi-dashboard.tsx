@@ -160,7 +160,7 @@ export function ManagerKpiDashboard() {
         />
         <OwnerControlCard
           icon={MessageCircle}
-          label="Клиент ушел"
+          label="Ушел без ответа"
           value={kpi.totals.missed}
           hint={kpi.totals.missed ? `${missedPercent}% без ответа` : 'уходов без ответа нет'}
           tone={kpi.totals.missed ? 'rose' : 'teal'}
@@ -318,6 +318,7 @@ export function ManagerKpiDashboard() {
         <CardContent className="grid gap-3 lg:grid-cols-2">
           {kpi.rangedConversations.slice(0, 6).map((item: any) => {
             const quality = jivoQuality(item)
+            const waitLabel = quality.staleWithoutAnswer ? `${formatSeconds(quality.wait)}+` : formatSeconds(quality.wait)
 
             return (
               <div key={item.id} className="rounded-3xl border bg-white p-4 shadow-sm">
@@ -332,7 +333,7 @@ export function ManagerKpiDashboard() {
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     {quality.abandoned ? (
-                      <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700">Клиент ушел</Badge>
+                      <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700">Ушел без ответа</Badge>
                     ) : quality.late ? (
                       <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">Ответ поздно</Badge>
                     ) : item.first_response_at ? (
@@ -346,7 +347,7 @@ export function ManagerKpiDashboard() {
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-                  <MiniStat label="Ждал" value={formatSeconds(quality.wait)} danger={quality.abandoned || quality.late} />
+                  <MiniStat label="Ждал" value={waitLabel} danger={quality.abandoned || quality.late} />
                   <MiniStat label="Ответ" value={formatSeconds(quality.response)} danger={quality.late} />
                   <MiniStat label="Сообщения" value={item.messages_count || 0} />
                   <MiniStat label="Продажа" value={item.sale_closed ? 'Да' : 'Нет'} />
@@ -417,6 +418,7 @@ const outcomeLabels: Record<string, string> = {
 }
 
 const jivoSlaSeconds = 120
+const jivoWaitingCutoffSeconds = 30 * 60
 
 function jivoWaitSeconds(item: any) {
   const stored = Number(item?.wait_seconds)
@@ -433,17 +435,21 @@ function jivoWaitSeconds(item: any) {
   const end = item?.first_response_at || item?.accepted_at || item?.finished_at || new Date().toISOString()
   if (!start || !end) return null
   const diff = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000)
-  return Number.isFinite(diff) && diff >= 0 ? diff : null
+  if (!Number.isFinite(diff) || diff < 0) return null
+  return item?.first_response_at || item?.accepted_at || item?.finished_at
+    ? diff
+    : Math.min(diff, jivoWaitingCutoffSeconds)
 }
 
 function jivoQuality(item: any) {
   const wait = jivoWaitSeconds(item)
   const response = Number(item?.response_seconds)
   const hasResponse = Boolean(item?.first_response_at && Number.isFinite(response) && response >= 0)
-  const abandoned = Boolean((item?.abandoned || item?.status === 'missed' || (item?.finished_at && !item?.first_response_at)) && wait != null && wait >= 30)
+  const staleWithoutAnswer = !item?.first_response_at && !item?.accepted_at && !item?.finished_at && wait === jivoWaitingCutoffSeconds
+  const abandoned = Boolean(((item?.abandoned || item?.status === 'missed' || (item?.finished_at && !item?.first_response_at)) && wait != null && wait >= 30) || staleWithoutAnswer)
   const late = Boolean(item?.late_response || (hasResponse && response > jivoSlaSeconds) || (!item?.first_response_at && wait != null && wait > jivoSlaSeconds))
 
-  return { wait, response: hasResponse ? response : null, abandoned, late }
+  return { wait, response: hasResponse ? response : null, abandoned, late, staleWithoutAnswer }
 }
 
 function JivoActionDialog({

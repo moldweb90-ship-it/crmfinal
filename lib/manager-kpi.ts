@@ -50,6 +50,8 @@ export function formatSeconds(seconds: number | null | undefined) {
   return rest ? `${minutes} мин ${rest} сек` : `${minutes} мин`
 }
 
+const JIVO_WAITING_CUTOFF_SECONDS = 30 * 60
+
 function numericSeconds(value: any) {
   const number = Number(value)
   return Number.isFinite(number) && number >= 0 ? number : null
@@ -67,15 +69,20 @@ function conversationWaitSeconds(item: any) {
   ) return stored
 
   const start = item.started_at || item.created_at
-  const end = item.first_response_at || item.accepted_at || item.finished_at || new Date().toISOString()
+  const liveEnd = new Date().toISOString()
+  const end = item.first_response_at || item.accepted_at || item.finished_at || liveEnd
   if (!start || !end) return null
   const diff = Math.round((parseISO(end).getTime() - parseISO(start).getTime()) / 1000)
-  return Number.isFinite(diff) && diff >= 0 ? diff : null
+  if (!Number.isFinite(diff) || diff < 0) return null
+  return item.first_response_at || item.accepted_at || item.finished_at
+    ? diff
+    : Math.min(diff, JIVO_WAITING_CUTOFF_SECONDS)
 }
 
 function isAbandonedConversation(item: any) {
   const wait = conversationWaitSeconds(item)
-  return Boolean((item.abandoned || item.status === 'missed' || (item.finished_at && !item.first_response_at)) && wait != null && wait >= 30)
+  const staleWithoutAnswer = !item.first_response_at && !item.accepted_at && !item.finished_at && wait === JIVO_WAITING_CUTOFF_SECONDS
+  return Boolean(((item.abandoned || item.status === 'missed' || (item.finished_at && !item.first_response_at)) && wait != null && wait >= 30) || staleWithoutAnswer)
 }
 
 function isLateConversation(item: any) {
@@ -121,6 +128,7 @@ function uniqueConversations(conversations: any[]) {
       ...item,
       manager_id: itemHasManager || !existingHasManager ? item.manager_id : existing.manager_id,
       manager_name: itemHasManager || !existingHasManager ? item.manager_name : existing.manager_name,
+      last_event_at: item.last_event_at || existing.last_event_at,
       accepted_at: item.accepted_at || existing.accepted_at,
       first_response_at: item.first_response_at || existing.first_response_at,
       response_seconds: item.response_seconds ?? existing.response_seconds,
