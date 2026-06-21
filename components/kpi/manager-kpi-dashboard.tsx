@@ -13,6 +13,7 @@ import {
   CalendarPlus,
   Target,
   TrendingUp,
+  Trash2,
   UserCheck,
   UsersRound,
   Wallet,
@@ -49,6 +50,7 @@ import {
 } from '@/lib/hooks'
 import { money } from '@/lib/crm'
 import { db } from '@/lib/insforge'
+import { useAuth } from '@/lib/auth'
 
 const rangeLabels: Record<KpiRange, string> = {
   today: 'Сегодня',
@@ -60,6 +62,7 @@ const rangeLabels: Record<KpiRange, string> = {
 export function ManagerKpiDashboard() {
   const [range, setRange] = useState<KpiRange>('today')
   const [clockTick, setClockTick] = useState(0)
+  const { user } = useAuth()
   const { managers } = useManagers()
   const { conversations } = useJivoConversations()
   const { mutate: mutateConversations } = useJivoConversations()
@@ -73,6 +76,9 @@ export function ManagerKpiDashboard() {
   const { doctors } = useDoctors()
   const { clinics } = useClinics()
   const [actionDialog, setActionDialog] = useState<{ open: boolean; conversation: any | null }>({ open: false, conversation: null })
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; conversation: any | null }>({ open: false, conversation: null })
+  const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
+  const isAdmin = user?.role === 'admin'
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockTick((value) => value + 1), 15000)
@@ -107,6 +113,22 @@ export function ManagerKpiDashboard() {
   const handledPercent = kpi.totals.conversations ? Math.round((handled / kpi.totals.conversations) * 100) : 0
   const missedPercent = kpi.totals.conversations ? Math.round((kpi.totals.missed / kpi.totals.conversations) * 100) : 0
   const latePercent = kpi.totals.conversations ? Math.round((kpi.totals.lateResponses / kpi.totals.conversations) * 100) : 0
+
+  const deleteJivoConversation = async (conversation: any) => {
+    if (!isAdmin || !conversation?.id) return
+    setDeletingConversationId(conversation.id)
+    try {
+      const { error } = await db.from('jivo_conversations').delete().eq('id', conversation.id)
+      if (error) throw new Error(String(error))
+      await mutateConversations()
+      setDeleteDialog({ open: false, conversation: null })
+    } catch (error) {
+      console.error('Jivo conversation delete failed:', error)
+      alert('Не получилось удалить Jivo-диалог')
+    } finally {
+      setDeletingConversationId(null)
+    }
+  }
 
   return (
     <div className="space-y-6 animate-soft-in">
@@ -371,6 +393,17 @@ export function ManagerKpiDashboard() {
                       {outcomeLabels[item.outcome] || item.outcome}
                     </Badge>
                   )}
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-xl border-rose-200 bg-white text-rose-600 hover:bg-rose-50"
+                      onClick={() => setDeleteDialog({ open: true, conversation: item })}
+                    >
+                      <Trash2 className="mr-1.5 h-4 w-4" />
+                      Удалить
+                    </Button>
+                  )}
                 </div>
               </div>
             )
@@ -405,7 +438,58 @@ export function ManagerKpiDashboard() {
           setActionDialog({ open: false, conversation: null })
         }}
       />
+      <DeleteJivoConversationDialog
+        open={deleteDialog.open}
+        conversation={deleteDialog.conversation}
+        deleting={deletingConversationId === deleteDialog.conversation?.id}
+        onOpenChange={(open) => setDeleteDialog((current) => ({ ...current, open }))}
+        onConfirm={() => deleteJivoConversation(deleteDialog.conversation)}
+      />
     </div>
+  )
+}
+
+function DeleteJivoConversationDialog({
+  open,
+  conversation,
+  deleting,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean
+  conversation: any | null
+  deleting: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>Удалить Jivo-диалог?</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="rounded-3xl border bg-slate-50 p-4">
+            <div className="font-semibold text-slate-950">{conversation?.client_name || 'Клиент без имени'}</div>
+            <div className="mt-1 text-sm text-slate-500">
+              {conversation?.client_phone || 'телефон не указан'} · {conversation?.manager_name || 'менеджер не определен'}
+            </div>
+          </div>
+          <p className="text-sm leading-6 text-slate-600">
+            Диалог исчезнет из KPI, графиков и списка последних Jivo-обращений. Пациенты, записи, заявки и задачи не удаляются.
+          </p>
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button type="button" variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)} disabled={deleting}>
+            Отмена
+          </Button>
+          <Button type="button" className="rounded-xl bg-rose-600 hover:bg-rose-700" onClick={onConfirm} disabled={deleting || !conversation?.id}>
+            <Trash2 className="mr-1.5 h-4 w-4" />
+            {deleting ? 'Удаляем...' : 'Удалить'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

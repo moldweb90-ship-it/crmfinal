@@ -25,7 +25,7 @@ import { patientFocusReason, sourceLabel } from '@/lib/patient-crm'
 import { AddLeadDialog } from '@/components/leads/add-lead-dialog'
 import { AddAppointmentDialog } from '@/components/appointments/add-appointment-dialog'
 import { db } from '@/lib/insforge'
-import { DonutChart, RadialScore, SoftBarChart } from './charts'
+import { DonutChart, RadialScore } from './charts'
 import { buildManagerKpi, formatSeconds } from '@/lib/manager-kpi'
 
 const quickActions = [
@@ -78,7 +78,6 @@ export function ManagerDashboard() {
     const date = item.started_at || item.created_at
     return date && isSameDay(parseISO(date), day)
   }).length)
-  const appointmentTrendRaw = weekDays.map((day) => appointments.filter((appt: any) => appt.start_time && isSameDay(parseISO(appt.start_time), day)).length)
   const trendLabels = weekDays.map((day) => format(day, 'EEEEE', { locale: ru }).toUpperCase())
   const requestTrend = weekDays.map((day, index) => ({
     date: day,
@@ -101,7 +100,6 @@ export function ManagerDashboard() {
   const requestToday = requestTrend[requestTrend.length - 1]?.value || 0
   const requestBestDay = requestTrend.reduce((best, item) => item.value > best.value ? item : best, requestTrend[0])
   const requestDelta = previousRequests ? Math.round(((requestTotal - previousRequests) / previousRequests) * 100) : null
-  const barData = trendLabels.map((label, index) => ({ label, value: appointmentTrendRaw[index] }))
   const sourceColors = ['#14b8a6', '#38bdf8', '#22c55e', '#a78bfa', '#f59e0b', '#fb7185']
   const sourceCounts = [...leads, ...patients].reduce((acc: Record<string, number>, item: any) => {
     const key = item.source || 'unknown'
@@ -118,6 +116,7 @@ export function ManagerDashboard() {
     { label: 'На приеме', value: appointments.filter((appt: any) => appt.status === 'in_progress').length, color: '#f59e0b' },
     { label: 'Завершен', value: appointments.filter((appt: any) => appt.status === 'completed').length, color: '#22c55e' },
   ]
+  const clinicLoad = buildClinicLoad(appointments)
 
   const metrics = [
     { label: 'Новые заявки', value: freshLeads.length, icon: Radar, tone: 'bg-cyan-50 text-cyan-700', href: '/leads' },
@@ -272,10 +271,10 @@ export function ManagerDashboard() {
         <Card className="crm-panel border-0">
           <CardHeader>
             <CardTitle className="text-xl text-slate-950">Загрузка клиники</CardTitle>
-            <p className="text-sm text-slate-500">Гистограмма записей по дням недели.</p>
+            <p className="text-sm text-slate-500">Активные записи: в какие дни и часы клиника загружена сильнее.</p>
           </CardHeader>
           <CardContent>
-            <SoftBarChart data={barData} />
+            <ClinicLoadWidget data={clinicLoad} />
           </CardContent>
         </Card>
 
@@ -571,6 +570,154 @@ function AttentionRow({ icon: Icon, label, value, href, danger = false }: any) {
       <span className={`text-lg font-semibold ${danger && value > 0 ? 'text-rose-600' : 'text-slate-950'}`}>{value}</span>
     </Link>
   )
+}
+
+const clinicDayOrder = [
+  { index: 1, label: 'Пн' },
+  { index: 2, label: 'Вт' },
+  { index: 3, label: 'Ср' },
+  { index: 4, label: 'Чт' },
+  { index: 5, label: 'Пт' },
+  { index: 6, label: 'Сб' },
+  { index: 0, label: 'Вс' },
+]
+const clinicHourSlots = Array.from({ length: 15 }, (_, index) => 7 + index)
+const activeAppointmentStatuses = new Set(['planned', 'confirmed', 'in_progress', 'completed'])
+
+function parseAppointmentDate(appointment: any) {
+  const raw = appointment?.start_time || appointment?.start_at
+  if (!raw) return null
+  const date = parseISO(raw)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function buildClinicLoad(appointments: any[]) {
+  const dayCounts = clinicDayOrder.map((day) => ({ ...day, value: 0 }))
+  const hourCounts = clinicHourSlots.map((hour) => ({ hour, value: 0 }))
+  const heatmap = clinicDayOrder.map((day) => ({
+    ...day,
+    hours: clinicHourSlots.map((hour) => ({ hour, value: 0 })),
+  }))
+
+  appointments.forEach((appointment) => {
+    if (!activeAppointmentStatuses.has(appointment.status || 'planned')) return
+    const date = parseAppointmentDate(appointment)
+    if (!date) return
+
+    const dayIndex = date.getDay()
+    const hour = date.getHours()
+    const day = dayCounts.find((item) => item.index === dayIndex)
+    const hourItem = hourCounts.find((item) => item.hour === hour)
+    const heatDay = heatmap.find((item) => item.index === dayIndex)
+
+    if (day) day.value += 1
+    if (hourItem) hourItem.value += 1
+    const heatHour = heatDay?.hours.find((item) => item.hour === hour)
+    if (heatHour) heatHour.value += 1
+  })
+
+  const total = dayCounts.reduce((sum, item) => sum + item.value, 0)
+  const maxDay = dayCounts.reduce((max, item) => Math.max(max, item.value), 0)
+  const maxHour = hourCounts.reduce((max, item) => Math.max(max, item.value), 0)
+  const busiestDay = dayCounts.reduce((best, item) => item.value > best.value ? item : best, dayCounts[0])
+  const busiestHour = hourCounts.reduce((best, item) => item.value > best.value ? item : best, hourCounts[0])
+
+  return { dayCounts, hourCounts, heatmap, total, maxDay, maxHour, busiestDay, busiestHour }
+}
+
+function ClinicLoadWidget({ data }: { data: ReturnType<typeof buildClinicLoad> }) {
+  const hasData = data.total > 0
+  const topHours = [...data.hourCounts].sort((a, b) => b.value - a.value).slice(0, 3).filter((item) => item.value > 0)
+
+  if (!hasData) {
+    return (
+      <div className="rounded-3xl border border-dashed bg-white/70 p-8 text-center">
+        <div className="text-sm font-medium text-slate-700">Пока нет активных записей</div>
+        <div className="mt-1 text-sm text-slate-500">Когда появятся записи, здесь будет реальная загрузка по дням и часам.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-2">
+        <LoadSummary label="активных" value={data.total} />
+        <LoadSummary label="пик день" value={data.busiestDay.value ? data.busiestDay.label : '-'} hint={data.busiestDay.value ? `${data.busiestDay.value} зап.` : undefined} />
+        <LoadSummary label="пик час" value={data.busiestHour.value ? `${String(data.busiestHour.hour).padStart(2, '0')}:00` : '-'} hint={data.busiestHour.value ? `${data.busiestHour.value} зап.` : undefined} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+        <div className="space-y-2 rounded-3xl bg-white/70 p-3">
+          {data.dayCounts.map((day) => {
+            const width = data.maxDay ? Math.max(8, (day.value / data.maxDay) * 100) : 0
+            return (
+              <div key={day.label} className="grid grid-cols-[32px_1fr_34px] items-center gap-2 text-sm">
+                <span className="font-medium text-slate-500">{day.label}</span>
+                <div className="h-8 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-teal-500 to-sky-400 shadow-sm transition-all duration-500"
+                    style={{ width: day.value ? `${width}%` : '0%' }}
+                  />
+                </div>
+                <span className="text-right font-semibold text-slate-900">{day.value}</span>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="rounded-3xl border bg-white/75 p-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-950">Часы загрузки</div>
+              <div className="text-xs text-slate-500">
+                {topHours.length ? topHours.map((item) => `${String(item.hour).padStart(2, '0')}:00`).join(', ') : 'пиков пока нет'}
+              </div>
+            </div>
+            <Badge variant="outline" className="rounded-full border-teal-200 bg-teal-50 text-teal-700">по времени записи</Badge>
+          </div>
+          <div className="overflow-x-auto pb-1">
+            <div className="min-w-[460px] space-y-1">
+              <div className="grid grid-cols-[34px_repeat(15,minmax(22px,1fr))] gap-1 text-[10px] font-medium text-slate-400">
+                <span />
+                {clinicHourSlots.map((hour) => <span key={hour} className="text-center">{hour}</span>)}
+              </div>
+              {data.heatmap.map((day) => (
+                <div key={day.label} className="grid grid-cols-[34px_repeat(15,minmax(22px,1fr))] gap-1">
+                  <span className="py-1 text-xs font-semibold text-slate-500">{day.label}</span>
+                  {day.hours.map((hour) => (
+                    <div
+                      key={`${day.label}-${hour.hour}`}
+                      className="h-6 rounded-lg border border-white"
+                      title={`${day.label}, ${String(hour.hour).padStart(2, '0')}:00 - ${hour.value} записей`}
+                      style={{ backgroundColor: clinicLoadColor(hour.value, data.maxHour) }}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LoadSummary({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
+  return (
+    <div className="rounded-2xl border bg-white/80 px-3 py-2">
+      <div className="text-[11px] font-medium text-slate-500">{label}</div>
+      <div className="mt-1 flex items-baseline gap-1.5">
+        <span className="text-lg font-semibold leading-none text-slate-950">{value}</span>
+        {hint && <span className="text-[11px] text-slate-500">{hint}</span>}
+      </div>
+    </div>
+  )
+}
+
+function clinicLoadColor(value: number, max: number) {
+  if (!value || !max) return '#f8fafc'
+  const opacity = 0.18 + (value / max) * 0.68
+  return `rgba(20, 184, 166, ${opacity})`
 }
 
 function RequestDynamicsChart({ data, bestDay }: { data: any[]; bestDay: any }) {
