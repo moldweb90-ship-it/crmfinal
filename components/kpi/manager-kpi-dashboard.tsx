@@ -118,9 +118,31 @@ export function ManagerKpiDashboard() {
     if (!isAdmin || !conversation?.id) return
     setDeletingConversationId(conversation.id)
     try {
+      const linkedLeads = leads.filter((lead: any) => (
+        lead.jivo_conversation_id === conversation.id
+        && !lead.converted_patient_id
+        && !lead.patient_id
+      ))
+      const linkedTasks = tasks.filter((task: any) => (
+        task.jivo_conversation_id === conversation.id
+        && task.source_type === 'jivo'
+      ))
+      const linkedContacts = contacts.filter((contact: any) => (
+        linkedLeads.some((lead: any) => lead.id === contact.lead_id)
+      ))
+
+      for (const task of linkedTasks) {
+        await db.from('tasks').delete().eq('id', task.id)
+      }
+      for (const contact of linkedContacts) {
+        await db.from('contact_history').delete().eq('id', contact.id)
+      }
+      for (const lead of linkedLeads) {
+        await db.from('leads').delete().eq('id', lead.id)
+      }
       const { error } = await db.from('jivo_conversations').delete().eq('id', conversation.id)
       if (error) throw new Error(String(error))
-      await mutateConversations()
+      await Promise.all([mutateConversations(), mutateLeads(), mutateTasks(), mutateContacts()])
       setDeleteDialog({ open: false, conversation: null })
     } catch (error) {
       console.error('Jivo conversation delete failed:', error)
@@ -476,7 +498,7 @@ function DeleteJivoConversationDialog({
             </div>
           </div>
           <p className="text-sm leading-6 text-slate-600">
-            Диалог исчезнет из KPI, графиков и списка последних Jivo-обращений. Пациенты, записи, заявки и задачи не удаляются.
+            Диалог исчезнет из KPI, графиков и списка последних Jivo-обращений. Если от него остались тестовые заявки или задачи без пациента и записи, они тоже будут очищены.
           </p>
         </div>
         <DialogFooter className="gap-2 sm:gap-0">
